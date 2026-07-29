@@ -1,8 +1,14 @@
 import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { classifyIntent } from "./intent.js";
-import { buildAddressMessage, buildBalanceMessage, buildHelpMessage, buildWelcomeMessage } from "./responses.js";
+import { env } from "../../config/env.js";
+import { classifyIntent } from "../../ai-agent/chat/intent.js";
+import {
+  buildAddressMessage,
+  buildBalanceMessage,
+  buildHelpMessage,
+  buildWelcomeMessage,
+} from "../../ai-agent/chat/responses.js";
 import { createGroqClient, generateChatReply } from "./llm.js";
 
 export async function getWelcomeReply(userId: string): Promise<string> {
@@ -36,10 +42,10 @@ export async function handleChatMessage(userId: string, message: string): Promis
   // access at all, so even a manipulated reply here can't leak a real
   // balance or address; those only ever come from the deterministic
   // branches above.
-  const llm = createGroqClient();
+  const llm = createGroqClient(env.groqApiKey);
   if (llm) {
     try {
-      return await generateChatReply(llm, message);
+      return await generateChatReply(llm, message, env.groqModel);
     } catch {
       // fall through to the static reply below
     }

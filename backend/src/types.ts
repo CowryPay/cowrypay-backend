@@ -61,3 +61,51 @@ export interface DepositStateTransition {
   actor: string;
   createdAt: string;
 }
+
+export type SendState =
+  | "SEND_INSTRUCTED"
+  | "COMPLIANCE_SCREENING"
+  | "MANUAL_REVIEW"
+  | "SEND_REJECTED"
+  | "ORDER_CREATED"
+  | "PAYOUT_INITIATED"
+  | "SETTLING"
+  | "COMPLETE"
+  | "FAILED"
+  | "REFUNDED";
+
+export interface SendRecipient {
+  institution: string;
+  accountIdentifier: string;
+  accountName: string;
+  memo?: string;
+}
+
+export interface Send {
+  id: string;
+  userId: string;
+  walletId: string;
+  tokenSymbol: string;
+  chain: string;
+  amountHuman: string;
+  fiatCurrency: string;
+  recipient: SendRecipient;
+  rate: string | null;
+  provider: string;
+  providerOrderId: string | null;
+  reference: string;
+  withdrawTxHash: string | null;
+  state: SendState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SendStateTransition {
+  id: string;
+  sendId: string;
+  fromState: SendState | null;
+  toState: SendState;
+  trigger: string;
+  actor: string;
+  createdAt: string;
+}

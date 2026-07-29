@@ -30,4 +30,10 @@ export const env = {
   // degrades to a static reply instead of erroring (see domain/chat/llm.ts).
   groqApiKey: process.env.GROQ_API_KEY,
   groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+  // Off-ramp provider (Paycrest). API key only needed for order-creation and
+  // authenticated endpoints — rate quotes are public. Secret is only used to
+  // verify webhook signatures.
+  paycrestApiKey: process.env.PAYCREST_API_KEY,
+  paycrestApiSecret: process.env.PAYCREST_API_SECRET,
+  paycrestBaseUrl: process.env.PAYCREST_BASE_URL ?? "https://api.paycrest.io/v2",
 };
