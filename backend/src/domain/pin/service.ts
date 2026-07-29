@@ -1,6 +1,6 @@
 import { withTransaction } from "../../db/pool.js";
 import { usersRepo } from "../users/repository.js";
-import { hashPin } from "./hash.js";
+import { hashPin, verifyPin } from "./hash.js";
 
 // Mandatory setup step, and only after KYC clears (§5 step 6, §9) — this
 // ordering is enforced here, not just assumed by callers.
@@ -15,6 +15,17 @@ export async function setTransactionPin(userId: string, pin: string): Promise<vo
   await withTransaction(async (client) => {
     await usersRepo.setPinHash(client, userId, pinHash);
   });
+}
+
+// Used for both the app auto-lock/unlock flow and, later, send-time
+// authorization. No rate limiting yet — fine for gating "unlock the app"
+// (re-proving presence on an already-authenticated session), but a real
+// attempt-throttling/lockout mechanism needs to exist before this is relied
+// on to authorize an actual fund-moving action.
+export async function verifyTransactionPin(userId: string, pin: string): Promise<boolean> {
+  const user = await usersRepo.findById(userId);
+  if (!user?.pinHash) return false;
+  return verifyPin(pin, user.pinHash);
 }
 
 // Biometric is optional and supplementary — the PIN is the account-level

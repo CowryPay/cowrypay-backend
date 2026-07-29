@@ -7,6 +7,7 @@ export interface PublicUser {
   kycStatus: KycStatus;
   pinSet: boolean;
   biometricEnabled: boolean;
+  passwordSet: boolean;
   createdAt: string;
 }
 
@@ -20,6 +21,7 @@ export function toPublicUser(user: User): PublicUser {
     kycStatus: user.kycStatus,
     pinSet: user.pinHash !== null,
     biometricEnabled: user.biometricEnabled,
+    passwordSet: user.passwordSet,
     createdAt: user.createdAt,
   };
 }

@@ -11,6 +11,7 @@ function mapUser(row: any): User {
     kycReference: row.kyc_reference,
     pinHash: row.pin_hash,
     biometricEnabled: row.biometric_enabled,
+    passwordSet: row.password_set,
     createdAt: row.created_at,
   };
 }
@@ -58,6 +59,13 @@ export const usersRepo = {
       `update users set biometric_enabled = $2 where id = $1 returning *`,
       [userId, enabled],
     );
+    return mapUser(rows[0]);
+  },
+
+  async setPasswordSet(client: PoolClient, userId: string): Promise<User> {
+    const { rows } = await client.query(`update users set password_set = true where id = $1 returning *`, [
+      userId,
+    ]);
     return mapUser(rows[0]);
   },
 };
