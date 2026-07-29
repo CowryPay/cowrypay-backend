@@ -26,4 +26,8 @@ export const env = {
   // based (no cookies, so no CSRF exposure from a permissive policy), but
   // set this once there's a real frontend origin to lock down to.
   corsOrigins: process.env.CORS_ORIGINS?.split(",").map((o) => o.trim()),
+  // Only used for the free-form chat fallback — unset means that path
+  // degrades to a static reply instead of erroring (see domain/chat/llm.ts).
+  groqApiKey: process.env.GROQ_API_KEY,
+  groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
 };

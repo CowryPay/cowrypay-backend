@@ -95,6 +95,14 @@ export const depositsRepo = {
     );
   },
 
+  async getForUser(userId: string, limit = 10): Promise<Deposit[]> {
+    const { rows } = await pool.query(
+      `select * from deposits where user_id = $1 order by created_at desc limit $2`,
+      [userId, limit],
+    );
+    return rows.map(mapDeposit);
+  },
+
   async getTransitions(depositId: string): Promise<DepositStateTransition[]> {
     const { rows } = await pool.query(
       `select * from deposit_state_transitions where deposit_id = $1 order by created_at asc`,

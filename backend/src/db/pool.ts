@@ -10,6 +10,12 @@ setDefaultResultOrder("ipv4first");
 export const pool = new Pool({
   connectionString: env.databaseUrl,
   ssl: env.databaseSsl ? { rejectUnauthorized: false } : undefined,
+  // Without these, a flaky network path to the DB hangs a request forever
+  // instead of failing with a clear error — connectionTimeoutMillis bounds
+  // how long to wait for a new connection, statement_timeout bounds how
+  // long any single query can run once connected.
+  connectionTimeoutMillis: 8_000,
+  statement_timeout: 10_000,
 });
 
 export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
