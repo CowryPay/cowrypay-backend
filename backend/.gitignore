@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+# .env.example is intentionally tracked — it documents required vars with no secrets
+*.log
+.DS_Store

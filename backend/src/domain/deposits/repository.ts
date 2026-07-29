@@ -1,0 +1,105 @@
+import type { PoolClient } from "pg";
+import { pool } from "../../db/pool.js";
+import type { Deposit, DepositState, DepositStateTransition } from "../../types.js";
+
+function mapDeposit(row: any): Deposit {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    walletId: row.wallet_id,
+    tokenSymbol: row.token_symbol,
+    amount: row.amount,
+    chain: row.chain,
+    txHash: row.tx_hash,
+    state: row.state,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTransition(row: any): DepositStateTransition {
+  return {
+    id: row.id,
+    depositId: row.deposit_id,
+    fromState: row.from_state,
+    toState: row.to_state,
+    trigger: row.trigger,
+    actor: row.actor,
+    createdAt: row.created_at,
+  };
+}
+
+export const depositsRepo = {
+  async findById(id: string): Promise<Deposit | null> {
+    const { rows } = await pool.query(`select * from deposits where id = $1`, [id]);
+    return rows[0] ? mapDeposit(rows[0]) : null;
+  },
+
+  async findByIdForUpdate(client: PoolClient, id: string): Promise<Deposit | null> {
+    const { rows } = await client.query(`select * from deposits where id = $1 for update`, [id]);
+    return rows[0] ? mapDeposit(rows[0]) : null;
+  },
+
+  async findByChainAndTxHash(chain: string, txHash: string): Promise<Deposit | null> {
+    const { rows } = await pool.query(`select * from deposits where chain = $1 and tx_hash = $2`, [
+      chain,
+      txHash,
+    ]);
+    return rows[0] ? mapDeposit(rows[0]) : null;
+  },
+
+  // Relies on the (chain, tx_hash) unique constraint for idempotency — a
+  // retried webhook delivery for the same deposit returns null here instead
+  // of creating a duplicate.
+  async insertIfNew(
+    client: PoolClient,
+    input: {
+      userId: string;
+      walletId: string;
+      tokenSymbol: string;
+      amount: string;
+      chain: string;
+      txHash: string;
+    },
+  ): Promise<Deposit | null> {
+    const { rows } = await client.query(
+      `insert into deposits (user_id, wallet_id, token_symbol, amount, chain, tx_hash)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (chain, tx_hash) do nothing
+       returning *`,
+      [input.userId, input.walletId, input.tokenSymbol, input.amount, input.chain, input.txHash],
+    );
+    return rows[0] ? mapDeposit(rows[0]) : null;
+  },
+
+  async updateState(client: PoolClient, id: string, state: DepositState): Promise<Deposit> {
+    const { rows } = await client.query(
+      `update deposits set state = $2, updated_at = now() where id = $1 returning *`,
+      [id, state],
+    );
+    return mapDeposit(rows[0]);
+  },
+
+  async logTransition(
+    client: PoolClient,
+    depositId: string,
+    fromState: DepositState | null,
+    toState: DepositState,
+    trigger: string,
+    actor = "system",
+  ): Promise<void> {
+    await client.query(
+      `insert into deposit_state_transitions (deposit_id, from_state, to_state, trigger, actor)
+       values ($1, $2, $3, $4, $5)`,
+      [depositId, fromState, toState, trigger, actor],
+    );
+  },
+
+  async getTransitions(depositId: string): Promise<DepositStateTransition[]> {
+    const { rows } = await pool.query(
+      `select * from deposit_state_transitions where deposit_id = $1 order by created_at asc`,
+      [depositId],
+    );
+    return rows.map(mapTransition);
+  },
+};
