@@ -64,6 +64,12 @@ export async function handleChatMessage(userId: string, message: string): Promis
     return { reply: buildBalanceMessage(balances, deposits) };
   }
 
+  if (intent === "txHistory") {
+    await touchSession(userId);
+    const sends = await sendsRepo.getForUser(userId, 5);
+    return { reply: buildTxHistoryMessage(sends) };
+  }
+
   if (intent === "help") {
     await touchSession(userId);
     return { reply: buildHelpMessage() };
