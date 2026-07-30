@@ -76,6 +76,9 @@ export type SendState =
 
 export interface SendRecipient {
   institution: string;
+  // Human-readable label for `institution` (e.g. "OPay" for code "OPAYNGPC")
+  // — Paycrest's code is what routes the payment, not what a user should see.
+  institutionName?: string;
   accountIdentifier: string;
   accountName: string;
   memo?: string;

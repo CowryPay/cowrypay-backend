@@ -176,6 +176,7 @@ export async function resolveRemittanceIntent(
     if (saved) {
       const recipient: SendRecipient = {
         institution: saved.institution,
+        institutionName: saved.institutionName,
         accountIdentifier: saved.accountIdentifier,
         accountName: saved.accountName,
         memo: saved.nickname,
@@ -252,6 +253,7 @@ export async function resolveRemittanceIntent(
 
   const recipient: SendRecipient = {
     institution: matched.code,
+    institutionName: matched.name,
     accountIdentifier: intent.accountIdentifier,
     accountName: verified.accountName,
     ...(intent.recipientNickname ? { memo: intent.recipientNickname } : {}),

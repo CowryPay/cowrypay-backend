@@ -67,6 +67,7 @@ offrampRouter.post("/offramp/verify-recipient", requireAuth, async (req: Request
 
 const RecipientSchema = z.object({
   institution: z.string().min(1),
+  institutionName: z.string().optional(),
   accountIdentifier: z.string().min(1),
   accountName: z.string().min(1),
   memo: z.string().optional(),
