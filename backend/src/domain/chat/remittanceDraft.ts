@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
-import { getCurrencySymbol, resolveCountry, SUPPORTED_COUNTRIES } from "../../ai-agent/offramp/countries.js";
+import {
+  getCurrencySymbol,
+  listSupportedCountries,
+  resolveCountry,
+  SUPPORTED_COUNTRIES,
+  type CountryInfo,
+} from "../../ai-agent/offramp/countries.js";
 import { describeInstitutionPrompt, findInstitutionMatches } from "../../ai-agent/offramp/institutionMatch.js";
 import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
@@ -44,6 +50,34 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
   };
 }
 
+/**
+ * Some institutions only operate in one country (e.g. "OPay" -> Nigeria
+ * only). When the user names a specific provider before naming a country,
+ * search every supported corridor's institution list and, if the name
+ * resolves to exactly one country, infer the country instead of asking for
+ * it. Falls back to null (caller asks the country question as usual) if
+ * it's ambiguous, unmatched, or a lookup fails.
+ */
+async function resolveInstitutionAcrossCountries(
+  query: string,
+): Promise<{ country: CountryInfo; institution: Institution } | null> {
+  const countries = listSupportedCountries();
+  const results = await Promise.all(
+    countries.map(async (country) => {
+      try {
+        const institutions = await getInstitutions(country.currencyCode);
+        const matches = findInstitutionMatches(query, institutions);
+        if (matches.length === 1) return { country, institution: matches[0]! };
+      } catch {
+        // Ignore per-corridor lookup failures — worst case we miss an inference.
+      }
+      return null;
+    }),
+  );
+  const hits = results.filter((r): r is { country: CountryInfo; institution: Institution } => r !== null);
+  return hits.length === 1 ? hits[0]! : null;
+}
+
 // Turns a parsed remittance intent into either a fully-resolved, ready-to-send
 // draft, or a conversational question asking for whatever's missing/ambiguous.
 //
@@ -68,7 +102,19 @@ export async function resolveRemittanceIntent(
     return { ok: false, message: `How much would you like to send? e.g. "send $50 to a bank account in Nigeria".` };
   }
 
-  const country = resolveCountry(intent.countryHint);
+  let country = resolveCountry(intent.countryHint);
+  let matched: Institution | null = null;
+
+  // Country wasn't named, but an institution was — try inferring it before
+  // asking a question the institution name might already answer.
+  if (!country && intent.institutionHint) {
+    const inferred = await resolveInstitutionAcrossCountries(intent.institutionHint);
+    if (inferred) {
+      country = inferred.country;
+      matched = inferred.institution;
+    }
+  }
+
   if (!country) {
     return {
       ok: false,
@@ -94,19 +140,23 @@ export async function resolveRemittanceIntent(
   const wallet = await walletsRepo.findByUserId(userId);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
 
-  let institutions;
-  try {
-    institutions = await getInstitutions(country.currencyCode);
-  } catch {
-    return { ok: false, message: `I couldn't look up providers for ${country.name} right now — try again shortly.` };
-  }
+  // Only re-resolve the institution against this country's list if the
+  // cross-country search above didn't already nail it down.
+  if (!matched) {
+    let institutions;
+    try {
+      institutions = await getInstitutions(country.currencyCode);
+    } catch {
+      return { ok: false, message: `I couldn't look up providers for ${country.name} right now — try again shortly.` };
+    }
 
-  let matched: Institution | null = findInstitutionMatches(intent.institutionHint, institutions)[0] ?? null;
-  if (!matched) {
-    matched = await resolveInstitutionWithLlm(intent.institutionHint, institutions);
-  }
-  if (!matched) {
-    return { ok: false, message: describeInstitutionPrompt(institutions) };
+    matched = findInstitutionMatches(intent.institutionHint, institutions)[0] ?? null;
+    if (!matched) {
+      matched = await resolveInstitutionWithLlm(intent.institutionHint, institutions);
+    }
+    if (!matched) {
+      return { ok: false, message: describeInstitutionPrompt(institutions) };
+    }
   }
 
   let verified;
