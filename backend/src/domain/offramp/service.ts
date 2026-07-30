@@ -6,13 +6,17 @@ import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
+import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
 
 // Carried over from a chat draft (domain/chat/remittanceDraft.ts), which
-// already locked a real rate/receive address by creating this order up
-// front — reused here instead of creating a second, redundant order.
+// already locked a real rate/receive address (against the net amount, after
+// fee) by creating this order up front — reused here instead of creating a
+// second, redundant order.
 export interface LockedOrder extends CreatedOrder {
   reference: string;
+  feeAmount: string;
+  treasuryAddress: string;
 }
 
 export interface InitiateSendInput {
@@ -33,7 +37,9 @@ export interface InitiatedSend {
 // (mirroring domain/deposits/screening.ts) and the Blockradar withdraw
 // broadcast that would move a send on to PAYOUT_INITIATED/SETTLING/COMPLETE
 // via the payment_order.* webhook aren't wired yet — this only proves the
-// Paycrest order-creation leg works end to end.
+// Paycrest order-creation leg works end to end. The fee split is bookkeeping
+// only for the same reason: nothing actually moves the fee to treasury until
+// that withdraw step exists.
 export async function initiateSend(userId: string, input: InitiateSendInput): Promise<InitiatedSend> {
   const user = await usersRepo.findById(userId);
   if (!user) throw new Error("User not found");
@@ -54,6 +60,10 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       : null;
 
   const reference = reusable?.reference ?? randomUUID();
+  const { feeAmount, netAmount } = reusable
+    ? { feeAmount: reusable.feeAmount, netAmount: null }
+    : computeFeeSplit(input.amount);
+  const treasuryAddress = reusable?.treasuryAddress ?? requireTreasuryAddress();
 
   const send = await withTransaction(async (client) => {
     const created = await sendsRepo.create(client, {
@@ -65,6 +75,8 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       fiatCurrency: input.fiatCurrency,
       recipient: input.recipient,
       reference,
+      feeAmount,
+      treasuryAddress,
     });
     await sendsRepo.logTransition(client, created.id, null, "SEND_INSTRUCTED", "send_requested");
     return created;
@@ -73,7 +85,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const order =
     reusable ??
     (await createOfframpOrder({
-      amount: input.amount,
+      amount: netAmount!,
       token: env.defaultTokenSymbol,
       network: wallet.chain,
       refundAddress: wallet.address,

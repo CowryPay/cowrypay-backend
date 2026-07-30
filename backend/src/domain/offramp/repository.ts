@@ -13,6 +13,8 @@ function mapSend(row: any): Send {
     fiatCurrency: row.fiat_currency,
     recipient: row.recipient,
     rate: row.rate,
+    feeAmount: row.fee_amount,
+    treasuryAddress: row.treasury_address,
     provider: row.provider,
     providerOrderId: row.provider_order_id,
     reference: row.reference,
@@ -52,11 +54,13 @@ export const sendsRepo = {
       fiatCurrency: string;
       recipient: SendRecipient;
       reference: string;
+      feeAmount?: string;
+      treasuryAddress?: string;
     },
   ): Promise<Send> {
     const { rows } = await client.query(
-      `insert into sends (user_id, wallet_id, token_symbol, chain, amount_human, fiat_currency, recipient, reference)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+      `insert into sends (user_id, wallet_id, token_symbol, chain, amount_human, fiat_currency, recipient, reference, fee_amount, treasury_address)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        returning *`,
       [
         input.userId,
@@ -67,6 +71,8 @@ export const sendsRepo = {
         input.fiatCurrency,
         JSON.stringify(input.recipient),
         input.reference,
+        input.feeAmount ?? null,
+        input.treasuryAddress ?? null,
       ],
     );
     return mapSend(rows[0]);

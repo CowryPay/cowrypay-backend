@@ -91,6 +91,8 @@ export interface Send {
   fiatCurrency: string;
   recipient: SendRecipient;
   rate: string | null;
+  feeAmount: string | null;
+  treasuryAddress: string | null;
   provider: string;
   providerOrderId: string | null;
   reference: string;

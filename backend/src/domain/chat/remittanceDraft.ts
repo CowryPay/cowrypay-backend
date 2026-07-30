@@ -3,6 +3,7 @@ import { env } from "../../config/env.js";
 import { getCurrencySymbol, resolveCountry, SUPPORTED_COUNTRIES } from "../../ai-agent/offramp/countries.js";
 import { describeInstitutionPrompt, findInstitutionMatches } from "../../ai-agent/offramp/institutionMatch.js";
 import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
+import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { walletsRepo } from "../wallets/repository.js";
 import type { SendRecipient } from "../../types.js";
 import type { ParsedIntent } from "./schemas.js";
@@ -10,6 +11,9 @@ import { resolveInstitutionWithLlm } from "./llm.js";
 
 export interface RemittanceDraft {
   amount: string;
+  feeAmount: string;
+  netAmount: string;
+  treasuryAddress: string;
   fiatCurrency: string;
   recipient: SendRecipient;
   rate: string;
@@ -52,6 +56,10 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
 // receive address, which POST /offramp/sends reuses on confirm instead of
 // creating a second, redundant order. This never calls initiateSend itself:
 // chat only ever gets to *propose*, never to *execute*.
+//
+// Only the net amount (after the platform fee) is sent to Paycrest for
+// conversion — the fee itself isn't moved anywhere yet (that's the
+// still-unbuilt withdraw step's job), just recorded on the draft.
 export async function resolveRemittanceIntent(
   userId: string,
   intent: RemittanceIntent,
@@ -74,6 +82,13 @@ export async function resolveRemittanceIntent(
 
   if (!intent.accountIdentifier) {
     return { ok: false, message: `What's the account number or phone number to send to?` };
+  }
+
+  let treasuryAddress: string;
+  try {
+    treasuryAddress = requireTreasuryAddress();
+  } catch (err) {
+    return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
   }
 
   const wallet = await walletsRepo.findByUserId(userId);
@@ -108,6 +123,7 @@ export async function resolveRemittanceIntent(
   }
 
   const amount = String(intent.amount);
+  const { feeAmount, netAmount } = computeFeeSplit(amount);
   const recipient: SendRecipient = {
     institution: matched.code,
     accountIdentifier: intent.accountIdentifier,
@@ -119,7 +135,7 @@ export async function resolveRemittanceIntent(
   let order;
   try {
     order = await createOfframpOrder({
-      amount,
+      amount: netAmount,
       token: env.defaultTokenSymbol,
       network: wallet.chain,
       refundAddress: wallet.address,
@@ -134,7 +150,7 @@ export async function resolveRemittanceIntent(
     };
   }
 
-  const payout = Number(amount) * Number(order.rate);
+  const payout = Number(netAmount) * Number(order.rate);
   const payoutEstimate = Number.isFinite(payout)
     ? ` (roughly ${getCurrencySymbol(country.currencyCode)}${payout.toLocaleString()})`
     : "";
@@ -143,6 +159,9 @@ export async function resolveRemittanceIntent(
     ok: true,
     draft: {
       amount,
+      feeAmount,
+      netAmount,
+      treasuryAddress,
       fiatCurrency: country.currencyCode,
       recipient,
       rate: order.rate,
@@ -151,6 +170,6 @@ export async function resolveRemittanceIntent(
       receiveAddress: order.receiveAddress,
       validUntil: order.validUntil,
     },
-    summary: `Ready to send $${amount} to ${verified.accountName} (${matched.name}) in ${country.name}${payoutEstimate}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to send $${amount} to ${verified.accountName} (${matched.name}) in ${country.name}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
   };
 }

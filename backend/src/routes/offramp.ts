@@ -80,6 +80,8 @@ const ExistingOrderSchema = z.object({
   validUntil: z.string().min(1),
   rate: z.string().min(1),
   reference: z.string().min(1),
+  feeAmount: z.string().min(1),
+  treasuryAddress: z.string().min(1),
 });
 
 const CreateSendSchema = z.object({

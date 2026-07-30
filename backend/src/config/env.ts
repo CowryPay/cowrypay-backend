@@ -44,4 +44,10 @@ export const env = {
   // How long a half-finished multi-turn chat draft (e.g. a partial send
   // request) survives with no reply before the next message starts fresh.
   chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 10),
+  // Platform fee skimmed from every remittance, in basis points (120 =
+  // 1.2% — covers per-wallet creation cost, not just pure margin). Only
+  // required when a send is actually resolved — checked lazily by
+  // domain/offramp/fee.ts, not here.
+  remittanceTreasuryAddress: process.env.REMITTANCE_TREASURY_ADDRESS,
+  remittanceFeeBps: Number(process.env.REMITTANCE_FEE_BPS ?? 120),
 };
