@@ -18,7 +18,22 @@ export type RemittanceResolution =
   | { ok: true; draft: RemittanceDraft; summary: string }
   | { ok: false; message: string };
 
-type RemittanceIntent = Extract<ParsedIntent, { kind: "remittance" }>;
+export type RemittanceIntent = Extract<ParsedIntent, { kind: "remittance" }>;
+
+// Fills gaps in a newly-parsed message with whatever the prior draft already
+// had — new non-empty values win, missing ones fall back to what's already
+// known. Doesn't trust the LLM to always echo prior fields back itself.
+export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: RemittanceIntent): RemittanceIntent {
+  return {
+    kind: "remittance",
+    action: "SEND_REMITTANCE",
+    amount: incoming.amount ?? existing.amount,
+    recipientNickname: incoming.recipientNickname ?? existing.recipientNickname,
+    countryHint: incoming.countryHint ?? existing.countryHint,
+    institutionHint: incoming.institutionHint ?? existing.institutionHint,
+    accountIdentifier: incoming.accountIdentifier ?? existing.accountIdentifier,
+  };
+}
 
 // Turns a parsed remittance intent into either a fully-resolved, ready-to-send
 // draft, or a conversational question asking for whatever's missing/ambiguous.

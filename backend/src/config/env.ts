@@ -41,4 +41,7 @@ export const env = {
   paycrestApiKey: process.env.PAYCREST_API_KEY,
   paycrestApiSecret: process.env.PAYCREST_API_SECRET,
   paycrestBaseUrl: process.env.PAYCREST_BASE_URL ?? "https://api.paycrest.io/v2",
+  // How long a half-finished multi-turn chat draft (e.g. a partial send
+  // request) survives with no reply before the next message starts fresh.
+  chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 10),
 };
