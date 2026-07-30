@@ -10,6 +10,7 @@ import {
 import { describeInstitutionPrompt, findInstitutionMatches } from "../../ai-agent/offramp/institutionMatch.js";
 import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
+import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import type { SendRecipient } from "../../types.js";
 import type { ParsedIntent } from "./schemas.js";
@@ -78,6 +79,75 @@ async function resolveInstitutionAcrossCountries(
   return hits.length === 1 ? hits[0]! : null;
 }
 
+// Shared tail once amount + fiatCurrency + a fully-resolved recipient are
+// known, whether that came from a fresh parse or a saved recipient. Locks a
+// real rate by creating a Paycrest order (see resolveRemittanceIntent's own
+// comment for why that's the source of truth instead of the rate-preview
+// endpoint) and only sends the net amount (after platform fee) for
+// conversion — the fee itself isn't moved anywhere yet, just recorded.
+async function finalizeRemittanceDraft(
+  userId: string,
+  amount: number,
+  fiatCurrency: string,
+  fiatCountryLabel: string,
+  recipient: SendRecipient,
+): Promise<RemittanceResolution> {
+  let treasuryAddress: string;
+  try {
+    treasuryAddress = requireTreasuryAddress();
+  } catch (err) {
+    return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
+  }
+
+  const wallet = await walletsRepo.findByUserId(userId);
+  if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
+
+  const amountStr = String(amount);
+  const { feeAmount, netAmount } = computeFeeSplit(amountStr);
+  const reference = randomUUID();
+
+  let order;
+  try {
+    order = await createOfframpOrder({
+      amount: netAmount,
+      token: env.defaultTokenSymbol,
+      network: wallet.chain,
+      refundAddress: wallet.address,
+      fiatCurrency,
+      recipient,
+      reference,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,
+    };
+  }
+
+  const payout = Number(netAmount) * Number(order.rate);
+  const payoutEstimate = Number.isFinite(payout)
+    ? ` (roughly ${getCurrencySymbol(fiatCurrency)}${payout.toLocaleString()})`
+    : "";
+
+  return {
+    ok: true,
+    draft: {
+      amount: amountStr,
+      feeAmount,
+      netAmount,
+      treasuryAddress,
+      fiatCurrency,
+      recipient,
+      rate: order.rate,
+      reference,
+      orderId: order.orderId,
+      receiveAddress: order.receiveAddress,
+      validUntil: order.validUntil,
+    },
+    summary: `Ready to send $${amountStr} to ${recipient.accountName}${fiatCountryLabel}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
+  };
+}
+
 // Turns a parsed remittance intent into either a fully-resolved, ready-to-send
 // draft, or a conversational question asking for whatever's missing/ambiguous.
 //
@@ -90,16 +160,34 @@ async function resolveInstitutionAcrossCountries(
 // receive address, which POST /offramp/sends reuses on confirm instead of
 // creating a second, redundant order. This never calls initiateSend itself:
 // chat only ever gets to *propose*, never to *execute*.
-//
-// Only the net amount (after the platform fee) is sent to Paycrest for
-// conversion — the fee itself isn't moved anywhere yet (that's the
-// still-unbuilt withdraw step's job), just recorded on the draft.
 export async function resolveRemittanceIntent(
   userId: string,
   intent: RemittanceIntent,
 ): Promise<RemittanceResolution> {
   if (intent.amount == null || intent.amount <= 0) {
     return { ok: false, message: `How much would you like to send? e.g. "send $50 to a bank account in Nigeria".` };
+  }
+
+  // A saved recipient (e.g. "mom") skips country/institution/account
+  // resolution entirely — those were already settled the first time this
+  // recipient was saved. This is the whole point of saving one.
+  if (intent.recipientNickname) {
+    const saved = await recipientsRepo.findByNickname(userId, intent.recipientNickname);
+    if (saved) {
+      const recipient: SendRecipient = {
+        institution: saved.institution,
+        accountIdentifier: saved.accountIdentifier,
+        accountName: saved.accountName,
+        memo: saved.nickname,
+      };
+      return finalizeRemittanceDraft(
+        userId,
+        intent.amount,
+        saved.fiatCurrency,
+        ` (${saved.institutionName})`,
+        recipient,
+      );
+    }
   }
 
   let country = resolveCountry(intent.countryHint);
@@ -129,16 +217,6 @@ export async function resolveRemittanceIntent(
   if (!intent.accountIdentifier) {
     return { ok: false, message: `What's the account number or phone number to send to?` };
   }
-
-  let treasuryAddress: string;
-  try {
-    treasuryAddress = requireTreasuryAddress();
-  } catch (err) {
-    return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
-  }
-
-  const wallet = await walletsRepo.findByUserId(userId);
-  if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
 
   // Only re-resolve the institution against this country's list if the
   // cross-country search above didn't already nail it down.
@@ -172,54 +250,18 @@ export async function resolveRemittanceIntent(
     };
   }
 
-  const amount = String(intent.amount);
-  const { feeAmount, netAmount } = computeFeeSplit(amount);
   const recipient: SendRecipient = {
     institution: matched.code,
     accountIdentifier: intent.accountIdentifier,
     accountName: verified.accountName,
     ...(intent.recipientNickname ? { memo: intent.recipientNickname } : {}),
   };
-  const reference = randomUUID();
 
-  let order;
-  try {
-    order = await createOfframpOrder({
-      amount: netAmount,
-      token: env.defaultTokenSymbol,
-      network: wallet.chain,
-      refundAddress: wallet.address,
-      fiatCurrency: country.currencyCode,
-      recipient,
-      reference,
-    });
-  } catch (err) {
-    return {
-      ok: false,
-      message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,
-    };
-  }
-
-  const payout = Number(netAmount) * Number(order.rate);
-  const payoutEstimate = Number.isFinite(payout)
-    ? ` (roughly ${getCurrencySymbol(country.currencyCode)}${payout.toLocaleString()})`
-    : "";
-
-  return {
-    ok: true,
-    draft: {
-      amount,
-      feeAmount,
-      netAmount,
-      treasuryAddress,
-      fiatCurrency: country.currencyCode,
-      recipient,
-      rate: order.rate,
-      reference,
-      orderId: order.orderId,
-      receiveAddress: order.receiveAddress,
-      validUntil: order.validUntil,
-    },
-    summary: `Ready to send $${amount} to ${verified.accountName} (${matched.name}) in ${country.name}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
-  };
+  return finalizeRemittanceDraft(
+    userId,
+    intent.amount,
+    country.currencyCode,
+    ` (${matched.name}) in ${country.name}`,
+    recipient,
+  );
 }

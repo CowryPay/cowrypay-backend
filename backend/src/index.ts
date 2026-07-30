@@ -11,6 +11,7 @@ import { kycRouter } from "./routes/kyc.js";
 import { offrampRouter } from "./routes/offramp.js";
 import { passwordRouter } from "./routes/password.js";
 import { pinRouter } from "./routes/pin.js";
+import { recipientsRouter } from "./routes/recipients.js";
 import { signupRouter } from "./routes/signup.js";
 import { usersRouter } from "./routes/users.js";
 
@@ -25,6 +26,7 @@ app.use(kycRouter);
 app.use(offrampRouter);
 app.use(passwordRouter);
 app.use(pinRouter);
+app.use(recipientsRouter);
 app.use(blockradarWebhookRouter);
 app.use(chatRouter);
 

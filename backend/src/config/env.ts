@@ -50,4 +50,8 @@ export const env = {
   // domain/offramp/fee.ts, not here.
   remittanceTreasuryAddress: process.env.REMITTANCE_TREASURY_ADDRESS,
   remittanceFeeBps: Number(process.env.REMITTANCE_FEE_BPS ?? 120),
+  // Any secret string — a 32-byte encryption key gets derived from it via
+  // scrypt, so this doesn't need to be exact raw key bytes. Only required
+  // when a recipient is actually saved — checked lazily, not here.
+  recipientEncryptionKey: process.env.RECIPIENT_ENCRYPTION_KEY,
 };
