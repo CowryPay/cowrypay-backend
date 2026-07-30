@@ -1,4 +1,4 @@
-import type { Deposit, DepositState, LedgerBalance, Wallet } from "../../types.js";
+import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 
 export function buildWelcomeMessage(wallet: Wallet): string {
   return [
@@ -54,7 +54,34 @@ export function buildHelpMessage(): string {
     "Here's what I can help with right now:",
     `• "What's my balance?" — check your available balance and recent deposits`,
     `• "What's my deposit address?" — get your wallet address again`,
-    "",
-    "Sending money is coming soon — once it's live, just tell me who to send to and how much.",
+    `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
+    `• "My transactions" — see your recent sends`,
   ].join("\n");
+}
+
+export function buildTxHistoryMessage(sends: Send[]): string {
+  if (sends.length === 0) {
+    return `No sends yet — try "send $50 to a bank account in Nigeria" to make your first one.`;
+  }
+  const lines = sends.map(
+    (s) =>
+      `• ${s.amountHuman} ${s.tokenSymbol} → ${s.recipient.accountName} (${s.fiatCurrency}) — ${describeSendState(s.state)}`,
+  );
+  return `📜 Recent sends:\n${lines.join("\n")}`;
+}
+
+function describeSendState(state: SendState): string {
+  switch (state) {
+    case "COMPLETE":
+      return "delivered ✅";
+    case "MANUAL_REVIEW":
+      return "under review";
+    case "SEND_REJECTED":
+    case "FAILED":
+      return "failed";
+    case "REFUNDED":
+      return "refunded";
+    default:
+      return "processing";
+  }
 }

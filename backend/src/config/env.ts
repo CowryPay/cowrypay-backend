@@ -30,6 +30,11 @@ export const env = {
   // degrades to a static reply instead of erroring (see domain/chat/llm.ts).
   groqApiKey: process.env.GROQ_API_KEY,
   groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+  // Fallback only — used when Groq is unavailable/errors, or for intent
+  // parsing that needs the stronger model. Unset means no fallback; Groq
+  // failures degrade to the static reply, same as before.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5-20251001",
   // Off-ramp provider (Paycrest). API key only needed for order-creation and
   // authenticated endpoints — rate quotes are public. Secret is only used to
   // verify webhook signatures.

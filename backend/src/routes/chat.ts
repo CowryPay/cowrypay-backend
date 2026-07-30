@@ -25,8 +25,8 @@ chatRouter.post("/chat", requireAuth, async (req: Request, res: Response) => {
     return;
   }
   try {
-    const reply = await handleChatMessage(req.authUser!.id, parsed.data.message);
-    res.json({ reply });
+    const result = await handleChatMessage(req.authUser!.id, parsed.data.message);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

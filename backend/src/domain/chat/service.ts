@@ -1,15 +1,17 @@
 import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
+import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { env } from "../../config/env.js";
 import { classifyIntent } from "../../ai-agent/chat/intent.js";
 import {
   buildAddressMessage,
   buildBalanceMessage,
   buildHelpMessage,
+  buildTxHistoryMessage,
   buildWelcomeMessage,
 } from "../../ai-agent/chat/responses.js";
-import { createGroqClient, generateChatReply } from "./llm.js";
+import { createGroqClient, generateChatReply, parseWithLlm } from "./llm.js";
+import { resolveRemittanceIntent, type RemittanceDraft } from "./remittanceDraft.js";
 
 export async function getWelcomeReply(userId: string): Promise<string> {
   const wallet = await walletsRepo.findByUserId(userId);
@@ -17,13 +19,22 @@ export async function getWelcomeReply(userId: string): Promise<string> {
   return buildWelcomeMessage(wallet);
 }
 
-export async function handleChatMessage(userId: string, message: string): Promise<string> {
+export interface ChatResult {
+  reply: string;
+  // Present only when a remittance request fully resolved — the frontend
+  // shows this as a confirmation card, collects the PIN through its own
+  // dedicated flow, and submits it to POST /offramp/sends. Chat never calls
+  // that itself: a message alone must never be sufficient to move money (§9).
+  pendingSend?: RemittanceDraft;
+}
+
+export async function handleChatMessage(userId: string, message: string): Promise<ChatResult> {
   const intent = classifyIntent(message);
 
   if (intent === "address") {
     const wallet = await walletsRepo.findByUserId(userId);
     if (!wallet) throw new Error("No wallet found for user");
-    return buildAddressMessage(wallet);
+    return { reply: buildAddressMessage(wallet) };
   }
 
   if (intent === "balance") {
@@ -31,24 +42,48 @@ export async function handleChatMessage(userId: string, message: string): Promis
       ledgerRepo.getBalancesForUser(userId),
       depositsRepo.getForUser(userId, 5),
     ]);
-    return buildBalanceMessage(balances, deposits);
+    return { reply: buildBalanceMessage(balances, deposits) };
   }
 
   if (intent === "help") {
-    return buildHelpMessage();
+    return { reply: buildHelpMessage() };
   }
 
-  // Unmatched — falls to the LLM if configured. It has no account-data
-  // access at all, so even a manipulated reply here can't leak a real
-  // balance or address; those only ever come from the deterministic
-  // branches above.
-  const llm = createGroqClient(env.groqApiKey);
-  if (llm) {
-    try {
-      return await generateChatReply(llm, message, env.groqModel);
-    } catch {
-      // fall through to the static reply below
-    }
+  // Not matched by the fast deterministic patterns above — try the LLM
+  // intent parser next so natural-language send requests ("send $50 to a
+  // bank account in Nigeria") get understood, not just free-form replies.
+  const groq = createGroqClient();
+  const parsed = groq ? await parseWithLlm(groq, message).catch(() => null) : null;
+
+  if (parsed?.kind === "remittance") {
+    const resolution = await resolveRemittanceIntent(userId, parsed);
+    return resolution.ok
+      ? { reply: resolution.summary, pendingSend: resolution.draft }
+      : { reply: resolution.message };
   }
-  return `I didn't quite catch that — try asking "what's my balance", "what's my deposit address", or say "help" to see what I can do.`;
+
+  if (parsed?.kind === "admin") {
+    if (parsed.action === "BALANCE") {
+      const [balances, deposits] = await Promise.all([
+        ledgerRepo.getBalancesForUser(userId),
+        depositsRepo.getForUser(userId, 5),
+      ]);
+      return { reply: buildBalanceMessage(balances, deposits) };
+    }
+    if (parsed.action === "TX_HISTORY") {
+      const sends = await sendsRepo.getForUser(userId, 5);
+      return { reply: buildTxHistoryMessage(sends) };
+    }
+    if (parsed.action === "HELP") {
+      return { reply: buildHelpMessage() };
+    }
+    // action === "CHAT" falls through to the conversational reply below.
+  }
+
+  // Genuinely unmatched (or parser unavailable/errored) — free-form reply.
+  // No account-data access at all, so even a manipulated reply here can't
+  // leak a real balance or address; those only ever come from the
+  // deterministic branches above. Degrades to a static fallback internally
+  // if neither Groq nor Claude is configured.
+  return { reply: await generateChatReply(message) };
 }
