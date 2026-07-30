@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { setBiometricEnabled, setTransactionPin, verifyTransactionPin } from "../domain/pin/service.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { requireRecentAuth } from "../middleware/requireRecentAuth.js";
 
 export const pinRouter = Router();
 
@@ -9,7 +10,10 @@ const PinSchema = z.object({
   pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
 });
 
-pinRouter.post("/auth/pin", requireAuth, async (req: Request, res: Response) => {
+// Setting (or resetting) the PIN requires a fresh login, not just a live
+// session — see requireRecentAuth. This is the entire "forgot PIN" flow:
+// re-verify email OTP, then call this with the new PIN.
+pinRouter.post("/auth/pin", requireAuth, requireRecentAuth, async (req: Request, res: Response) => {
   const parsed = PinSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
@@ -39,7 +43,7 @@ const BiometricSchema = z.object({
   enabled: z.boolean(),
 });
 
-pinRouter.post("/auth/biometric", requireAuth, async (req: Request, res: Response) => {
+pinRouter.post("/auth/biometric", requireAuth, requireRecentAuth, async (req: Request, res: Response) => {
   const parsed = BiometricSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
