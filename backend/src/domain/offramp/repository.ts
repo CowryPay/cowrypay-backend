@@ -43,6 +43,11 @@ export const sendsRepo = {
     return rows[0] ? mapSend(rows[0]) : null;
   },
 
+  async findByProviderOrderId(providerOrderId: string): Promise<Send | null> {
+    const { rows } = await pool.query(`select * from sends where provider_order_id = $1`, [providerOrderId]);
+    return rows[0] ? mapSend(rows[0]) : null;
+  },
+
   async create(
     client: PoolClient,
     input: {
@@ -87,6 +92,19 @@ export const sendsRepo = {
       `update sends set state = 'ORDER_CREATED', provider_order_id = $2, rate = $3, updated_at = now()
        where id = $1 returning *`,
       [id, input.providerOrderId, input.rate],
+    );
+    return mapSend(rows[0]);
+  },
+
+  async updateState(
+    client: PoolClient,
+    id: string,
+    input: { state: SendState; withdrawTxHash?: string },
+  ): Promise<Send> {
+    const { rows } = await client.query(
+      `update sends set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), updated_at = now()
+       where id = $1 returning *`,
+      [id, input.state, input.withdrawTxHash ?? null],
     );
     return mapSend(rows[0]);
   },
