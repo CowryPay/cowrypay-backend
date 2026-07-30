@@ -24,8 +24,15 @@ offrampRouter.get("/offramp/rate", async (req: Request, res: Response) => {
   try {
     const quote = await getOfframpRate(parsed.data);
     res.json(quote);
-  } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  } catch {
+    // Paycrest's rate-preview endpoint doesn't cover every network (Celo
+    // included) even when real payout liquidity exists there — not a
+    // blocker, the real rate gets locked when a send is actually initiated.
+    // 200, not an error, so callers don't treat a missing preview as fatal.
+    res.json({
+      rate: null,
+      note: "A live preview isn't available for this network — you'll see the real rate when you start the send.",
+    });
   }
 });
 
@@ -65,11 +72,22 @@ const RecipientSchema = z.object({
   memo: z.string().optional(),
 });
 
+// Carried over verbatim from a chat draft's pendingSend — reuses the rate
+// and receive address it already locked instead of creating a second order.
+const ExistingOrderSchema = z.object({
+  orderId: z.string().min(1),
+  receiveAddress: z.string().min(1),
+  validUntil: z.string().min(1),
+  rate: z.string().min(1),
+  reference: z.string().min(1),
+});
+
 const CreateSendSchema = z.object({
   amount: z.string().regex(/^\d+(\.\d+)?$/, "amount must be a decimal string"),
   fiatCurrency: z.string().min(1),
   recipient: RecipientSchema,
   rate: z.string().optional(),
+  existingOrder: ExistingOrderSchema.optional(),
 });
 
 offrampRouter.post("/offramp/sends", requireAuth, async (req: Request, res: Response) => {

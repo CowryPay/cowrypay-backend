@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
 import { getCurrencySymbol, resolveCountry, SUPPORTED_COUNTRIES } from "../../ai-agent/offramp/countries.js";
 import { describeInstitutionPrompt, findInstitutionMatches } from "../../ai-agent/offramp/institutionMatch.js";
-import { getInstitutions, getOfframpRate, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
+import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
 import { walletsRepo } from "../wallets/repository.js";
 import type { SendRecipient } from "../../types.js";
 import type { ParsedIntent } from "./schemas.js";
@@ -11,7 +12,11 @@ export interface RemittanceDraft {
   amount: string;
   fiatCurrency: string;
   recipient: SendRecipient;
-  rate?: string;
+  rate: string;
+  reference: string;
+  orderId: string;
+  receiveAddress: string;
+  validUntil: string;
 }
 
 export type RemittanceResolution =
@@ -37,10 +42,16 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
 
 // Turns a parsed remittance intent into either a fully-resolved, ready-to-send
 // draft, or a conversational question asking for whatever's missing/ambiguous.
-// This never calls initiateSend itself — the frontend collects the PIN
-// through its own dedicated flow and submits the confirmed draft to
-// POST /offramp/sends, same as a manually-filled-in send. Chat only ever
-// gets to *propose*, never to *execute*.
+//
+// Gets its rate by actually creating a real Paycrest order, not by previewing
+// one — Paycrest's GET /rates estimate endpoint doesn't cover every network
+// (Celo included) even when real payout liquidity exists there, so relying
+// on it produces false "no provider available" errors. Creating the order up
+// front doesn't move any funds itself (only the still-unbuilt Blockradar
+// withdraw step does that, gated behind PIN) — it just locks a real rate and
+// receive address, which POST /offramp/sends reuses on confirm instead of
+// creating a second, redundant order. This never calls initiateSend itself:
+// chat only ever gets to *propose*, never to *execute*.
 export async function resolveRemittanceIntent(
   userId: string,
   intent: RemittanceIntent,
@@ -97,34 +108,49 @@ export async function resolveRemittanceIntent(
   }
 
   const amount = String(intent.amount);
-  let rate: string | undefined;
-  let payoutEstimate = "";
-  try {
-    const quote = await getOfframpRate({
-      network: wallet.chain,
-      token: env.defaultTokenSymbol,
-      amount,
-      fiatCurrency: country.currencyCode,
-    });
-    rate = quote.rate;
-    const payout = Number(intent.amount) * Number(quote.rate);
-    if (Number.isFinite(payout)) {
-      payoutEstimate = ` (roughly ${getCurrencySymbol(country.currencyCode)}${payout.toLocaleString()})`;
-    }
-  } catch {
-    // Non-critical — proceed without a payout estimate in the summary.
-  }
-
   const recipient: SendRecipient = {
     institution: matched.code,
     accountIdentifier: intent.accountIdentifier,
     accountName: verified.accountName,
     ...(intent.recipientNickname ? { memo: intent.recipientNickname } : {}),
   };
+  const reference = randomUUID();
+
+  let order;
+  try {
+    order = await createOfframpOrder({
+      amount,
+      token: env.defaultTokenSymbol,
+      network: wallet.chain,
+      refundAddress: wallet.address,
+      fiatCurrency: country.currencyCode,
+      recipient,
+      reference,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,
+    };
+  }
+
+  const payout = Number(amount) * Number(order.rate);
+  const payoutEstimate = Number.isFinite(payout)
+    ? ` (roughly ${getCurrencySymbol(country.currencyCode)}${payout.toLocaleString()})`
+    : "";
 
   return {
     ok: true,
-    draft: { amount, fiatCurrency: country.currencyCode, recipient, rate },
-    summary: `Ready to send $${amount} to ${verified.accountName} (${matched.name}) in ${country.name}${payoutEstimate}. Confirm in the app to enter your PIN and complete it.`,
+    draft: {
+      amount,
+      fiatCurrency: country.currencyCode,
+      recipient,
+      rate: order.rate,
+      reference,
+      orderId: order.orderId,
+      receiveAddress: order.receiveAddress,
+      validUntil: order.validUntil,
+    },
+    summary: `Ready to send $${amount} to ${verified.accountName} (${matched.name}) in ${country.name}${payoutEstimate}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
   };
 }

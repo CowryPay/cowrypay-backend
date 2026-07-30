@@ -5,14 +5,22 @@ import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
-import { createOfframpOrder } from "./paycrestAdapter.js";
+import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
 import { sendsRepo } from "./repository.js";
+
+// Carried over from a chat draft (domain/chat/remittanceDraft.ts), which
+// already locked a real rate/receive address by creating this order up
+// front — reused here instead of creating a second, redundant order.
+export interface LockedOrder extends CreatedOrder {
+  reference: string;
+}
 
 export interface InitiateSendInput {
   amount: string;
   fiatCurrency: string;
   recipient: SendRecipient;
   rate?: string;
+  existingOrder?: LockedOrder;
 }
 
 export interface InitiatedSend {
@@ -38,7 +46,14 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const wallet = await walletsRepo.findByUserId(userId);
   if (!wallet) throw new Error("No wallet found for user");
 
-  const reference = randomUUID();
+  // Reuse the chat-locked order only if it hasn't expired by the time the
+  // user actually confirms — Paycrest quotes are only valid for ~1hr.
+  const reusable =
+    input.existingOrder && new Date(input.existingOrder.validUntil).getTime() > Date.now()
+      ? input.existingOrder
+      : null;
+
+  const reference = reusable?.reference ?? randomUUID();
 
   const send = await withTransaction(async (client) => {
     const created = await sendsRepo.create(client, {
@@ -55,23 +70,31 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     return created;
   });
 
-  const order = await createOfframpOrder({
-    amount: input.amount,
-    token: env.defaultTokenSymbol,
-    network: wallet.chain,
-    refundAddress: wallet.address,
-    fiatCurrency: input.fiatCurrency,
-    recipient: input.recipient,
-    reference,
-    rate: input.rate,
-  });
+  const order =
+    reusable ??
+    (await createOfframpOrder({
+      amount: input.amount,
+      token: env.defaultTokenSymbol,
+      network: wallet.chain,
+      refundAddress: wallet.address,
+      fiatCurrency: input.fiatCurrency,
+      recipient: input.recipient,
+      reference,
+      rate: input.rate,
+    }));
 
   const updated = await withTransaction(async (client) => {
     const next = await sendsRepo.updateOrderCreated(client, send.id, {
       providerOrderId: order.orderId,
       rate: order.rate,
     });
-    await sendsRepo.logTransition(client, send.id, "SEND_INSTRUCTED", "ORDER_CREATED", "paycrest_order_created");
+    await sendsRepo.logTransition(
+      client,
+      send.id,
+      "SEND_INSTRUCTED",
+      "ORDER_CREATED",
+      reusable ? "reused_chat_locked_order" : "paycrest_order_created",
+    );
     return next;
   });
 
