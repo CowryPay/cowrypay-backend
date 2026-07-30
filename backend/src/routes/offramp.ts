@@ -89,6 +89,7 @@ const CreateSendSchema = z.object({
   amount: z.string().regex(/^\d+(\.\d+)?$/, "amount must be a decimal string"),
   fiatCurrency: z.string().min(1),
   recipient: RecipientSchema,
+  pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
   rate: z.string().optional(),
   existingOrder: ExistingOrderSchema.optional(),
 });

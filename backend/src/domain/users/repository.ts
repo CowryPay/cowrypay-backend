@@ -10,6 +10,8 @@ function mapUser(row: any): User {
     kycStatus: row.kyc_status,
     kycReference: row.kyc_reference,
     pinHash: row.pin_hash,
+    pinFailedAttempts: row.pin_failed_attempts,
+    pinLockedUntil: row.pin_locked_until,
     biometricEnabled: row.biometric_enabled,
     passwordSet: row.password_set,
     createdAt: row.created_at,
@@ -51,6 +53,27 @@ export const usersRepo = {
       userId,
       pinHash,
     ]);
+    return mapUser(rows[0]);
+  },
+
+  // 5 consecutive failures locks PIN verification out for 15 minutes — see
+  // domain/pin/service.ts. A success resets the counter and any lockout.
+  async recordPinAttempt(client: PoolClient, userId: string, success: boolean): Promise<User> {
+    const { rows } = success
+      ? await client.query(
+          `update users set pin_failed_attempts = 0, pin_locked_until = null where id = $1 returning *`,
+          [userId],
+        )
+      : await client.query(
+          `update users set
+             pin_failed_attempts = pin_failed_attempts + 1,
+             pin_locked_until = case
+               when pin_failed_attempts + 1 >= 5 then now() + interval '15 minutes'
+               else pin_locked_until
+             end
+           where id = $1 returning *`,
+          [userId],
+        );
     return mapUser(rows[0]);
   },
 

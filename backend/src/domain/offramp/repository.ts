@@ -48,6 +48,11 @@ export const sendsRepo = {
     return rows[0] ? mapSend(rows[0]) : null;
   },
 
+  async findByWithdrawTxHash(hash: string): Promise<Send | null> {
+    const { rows } = await pool.query(`select * from sends where withdraw_tx_hash = $1`, [hash]);
+    return rows[0] ? mapSend(rows[0]) : null;
+  },
+
   async create(
     client: PoolClient,
     input: {

@@ -14,15 +14,22 @@ export async function setTransactionPin(userId: string, pin: string): Promise<vo
   });
 }
 
-// Used for both the app auto-lock/unlock flow and, later, send-time
-// authorization. No rate limiting yet — fine for gating "unlock the app"
-// (re-proving presence on an already-authenticated session), but a real
-// attempt-throttling/lockout mechanism needs to exist before this is relied
-// on to authorize an actual fund-moving action.
+// Used for both the app auto-lock/unlock flow and send-time authorization
+// (domain/offramp/service.ts, right before a withdraw broadcasts). Locked
+// out for 15 minutes after 5 consecutive failures — see
+// usersRepo.recordPinAttempt — now that this gates real fund movement, not
+// just re-proving presence on an already-authenticated session.
 export async function verifyTransactionPin(userId: string, pin: string): Promise<boolean> {
   const user = await usersRepo.findById(userId);
   if (!user?.pinHash) return false;
-  return verifyPin(pin, user.pinHash);
+
+  if (user.pinLockedUntil && new Date(user.pinLockedUntil).getTime() > Date.now()) {
+    return false;
+  }
+
+  const valid = await verifyPin(pin, user.pinHash);
+  await withTransaction((client) => usersRepo.recordPinAttempt(client, userId, valid));
+  return valid;
 }
 
 // Biometric is optional and supplementary — the PIN is the account-level

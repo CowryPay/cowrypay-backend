@@ -1,5 +1,5 @@
 import { env } from "../../config/env.js";
-import type { CreatedWallet, WalletAdapter } from "./adapter.js";
+import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 
 interface GenerateAddressResponse {
   data: {
@@ -16,6 +16,45 @@ function requireBlockradarConfig(): { apiKey: string; walletId: string } {
     );
   }
   return { apiKey: env.blockradarApiKey, walletId: env.blockradarWalletId };
+}
+
+interface WalletAssetsResponse {
+  data: Array<{ id: string; asset: { symbol: string; blockchain: { slug: string } } }>;
+}
+
+// assetId (a Blockradar-internal UUID, not the token contract address) is
+// required by the withdraw endpoint but never changes for a given
+// symbol+chain pair — cached to avoid an extra lookup call on every send.
+const assetIdCache = new Map<string, { assetId: string; expiresAt: number }>();
+const ASSET_CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function resolveAssetId(apiKey: string, walletId: string, chain: string, symbol: string): Promise<string> {
+  const cacheKey = `${chain}:${symbol}`;
+  const cached = assetIdCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.assetId;
+
+  const res = await fetch(`${env.blockradarBaseUrl}/wallets/${walletId}/assets`, {
+    headers: { "x-api-key": apiKey },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Blockradar asset lookup failed (${res.status}): ${body}`);
+  }
+  const json = (await res.json()) as WalletAssetsResponse;
+  const match = json.data.find((a) => a.asset.symbol === symbol && a.asset.blockchain.slug === chain);
+  if (!match) throw new Error(`No Blockradar asset found for ${symbol} on ${chain}`);
+
+  assetIdCache.set(cacheKey, { assetId: match.id, expiresAt: Date.now() + ASSET_CACHE_TTL_MS });
+  return match.id;
+}
+
+interface WithdrawResponse {
+  data: {
+    hash?: string;
+    status?: string;
+    errors?: unknown[];
+    success?: Array<{ id: string; status: string }>;
+  };
 }
 
 // docs.blockradar.co — POST /wallets/{walletId}/addresses generates a
@@ -51,5 +90,45 @@ export const blockradarWalletAdapter: WalletAdapter = {
       address: json.data.address,
       chain: json.data.blockchain.slug,
     };
+  },
+
+  // docs.blockradar.co — POST .../addresses/{addressId}/withdraw broadcasts
+  // an outbound transfer from a per-user child address. Single-item mode
+  // only (not the batch form) — one call moves one asset to one address.
+  async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
+    const { apiKey, walletId } = requireBlockradarConfig();
+    const assetId = await resolveAssetId(apiKey, walletId, input.chain, input.tokenSymbol);
+
+    const res = await fetch(
+      `${env.blockradarBaseUrl}/wallets/${walletId}/addresses/${input.externalWalletId}/withdraw`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": apiKey },
+        body: JSON.stringify({
+          assetId,
+          address: input.toAddress,
+          amount: input.amount,
+          reference: input.reference,
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Blockradar withdraw failed (${res.status}): ${body}`);
+    }
+
+    const json = (await res.json()) as WithdrawResponse;
+    if (json.data.errors && json.data.errors.length > 0) {
+      throw new Error(`Blockradar withdraw rejected: ${JSON.stringify(json.data.errors)}`);
+    }
+
+    const hash = json.data.hash ?? json.data.success?.[0]?.id;
+    const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
+    if (!hash) {
+      throw new Error("Blockradar withdraw response had no transaction hash — response shape needs re-checking");
+    }
+
+    return { txHash: hash, status };
   },
 };

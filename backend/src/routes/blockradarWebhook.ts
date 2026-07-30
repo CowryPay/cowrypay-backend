@@ -2,13 +2,17 @@ import { Router, type Request, type Response } from "express";
 import { verifyBlockradarSignature } from "../domain/deposits/blockradarWebhook.js";
 import { ingestDeposit } from "../domain/deposits/stateMachine.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
+import { sendsRepo } from "../domain/offramp/repository.js";
+import { withTransaction } from "../db/pool.js";
 
 export const blockradarWebhookRouter = Router();
 
 // One URL receives every Blockradar event type (configured once on the
 // master wallet, per their docs) — branch on `event`, ignore anything that
-// isn't a deposit credit for now (withdraw/swap/offramp/gateway events,
-// plus non-success deposit states) rather than erroring on them.
+// isn't handled below (swap/offramp/gateway events, non-success deposit
+// states, withdraw.success — a synchronously-returned hash already marks a
+// send PAYOUT_INITIATED, see domain/offramp/service.ts, so on-chain
+// confirmation doesn't need to move it further) rather than erroring on them.
 blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: Response) => {
   const signature = req.header("x-blockradar-signature");
   if (!verifyBlockradarSignature(req.rawBody, signature)) {
@@ -17,6 +21,20 @@ blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: R
   }
 
   const event = req.body?.event;
+
+  if (event === "withdraw.failed") {
+    const hash = req.body?.data?.hash as string | undefined;
+    const send = hash ? await sendsRepo.findByWithdrawTxHash(hash) : null;
+    if (send && send.state !== "FAILED" && send.state !== "COMPLETE") {
+      await withTransaction(async (client) => {
+        await sendsRepo.updateState(client, send.id, { state: "FAILED" });
+        await sendsRepo.logTransition(client, send.id, send.state, "FAILED", "blockradar_withdraw_failed_webhook");
+      });
+    }
+    res.status(200).json({ ok: true });
+    return;
+  }
+
   if (event !== "deposit.success") {
     res.status(200).json({ ok: true, ignored: event });
     return;

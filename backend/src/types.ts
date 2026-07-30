@@ -7,6 +7,8 @@ export interface User {
   kycStatus: KycStatus;
   kycReference: string | null;
   pinHash: string | null;
+  pinFailedAttempts: number;
+  pinLockedUntil: string | null;
   biometricEnabled: boolean;
   passwordSet: boolean;
   createdAt: string;
