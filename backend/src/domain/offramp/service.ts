@@ -5,6 +5,7 @@ import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { sendUsdcFromAgent } from "../wallets/agentPayout.js";
+import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
@@ -81,6 +82,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const treasuryAddress = reusable?.treasuryAddress ?? requireTreasuryAddress();
 
   const send = await withTransaction(async (client) => {
+    // Atomic decrement-with-guard (see ledgerRepo.debitAvailable) — two
+    // concurrent sends can't both pass a balance check and double-spend the
+    // same funds; whichever commits first wins, the other sees the reduced
+    // balance and fails here.
+    const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, input.amount);
+    if (!debited) {
+      throw new Error("Insufficient balance");
+    }
+
     const created = await sendsRepo.create(client, {
       userId,
       walletId: wallet.id,
@@ -130,6 +140,10 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     payoutTxHash = await sendUsdcFromAgent(order.receiveAddress as `0x${string}`, netAmount);
   } catch (err) {
     await withTransaction(async (client) => {
+      // Refund — the balance was debited up front to prevent double-spending
+      // across concurrent sends, but the payout never actually left custody,
+      // so the user's balance shouldn't reflect otherwise.
+      await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, input.amount);
       await sendsRepo.updateState(client, updated.id, { state: "FAILED" });
       await sendsRepo.logTransition(
         client,

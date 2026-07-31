@@ -38,4 +38,25 @@ export const ledgerRepo = {
     );
     return mapBalance(rows[0]);
   },
+
+  // Atomic decrement-with-guard — the balance check and the subtraction
+  // happen in the same SQL statement, so two concurrent sends can't both
+  // pass a separate "is there enough?" check and double-spend the same
+  // balance. Returns null (not a thrown error) when there isn't enough,
+  // since "insufficient balance" is an expected outcome here, not a fault.
+  async debitAvailable(
+    client: PoolClient,
+    userId: string,
+    tokenSymbol: string,
+    amount: string,
+  ): Promise<LedgerBalance | null> {
+    const { rows } = await client.query(
+      `update ledger_balances
+       set available_balance = available_balance - $3, updated_at = now()
+       where user_id = $1 and token_symbol = $2 and available_balance >= $3
+       returning *`,
+      [userId, tokenSymbol, amount],
+    );
+    return rows[0] ? mapBalance(rows[0]) : null;
+  },
 };
