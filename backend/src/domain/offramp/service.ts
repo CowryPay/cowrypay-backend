@@ -173,7 +173,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       state: "PAYOUT_INITIATED",
       withdrawTxHash: payout.txHash,
     });
-    await sendsRepo.logTransition(client, updated.id, "ORDER_CREATED", "PAYOUT_INITIATED", "blockradar_withdraw_broadcast");
+    await sendsRepo.logTransition(
+      client,
+      updated.id,
+      "ORDER_CREATED",
+      "PAYOUT_INITIATED",
+      payout.txHash
+        ? "blockradar_withdraw_broadcast"
+        : "blockradar_withdraw_broadcast_pending_screening",
+    );
     return next;
   });
 
@@ -191,7 +199,13 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
         reference: `${reference}-fee`,
       });
       await withTransaction((client) =>
-        sendsRepo.logTransition(client, final.id, "PAYOUT_INITIATED", "PAYOUT_INITIATED", `fee_swept:${feeSweep.txHash}`),
+        sendsRepo.logTransition(
+          client,
+          final.id,
+          "PAYOUT_INITIATED",
+          "PAYOUT_INITIATED",
+          feeSweep.txHash ? `fee_swept:${feeSweep.txHash}` : "fee_swept_pending_screening",
+        ),
       );
     } catch (err) {
       console.error(`Fee sweep failed for send ${final.id}:`, err);

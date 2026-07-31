@@ -48,6 +48,11 @@ export const sendsRepo = {
     return rows[0] ? mapSend(rows[0]) : null;
   },
 
+  async findByReference(reference: string): Promise<Send | null> {
+    const { rows } = await pool.query(`select * from sends where reference = $1`, [reference]);
+    return rows[0] ? mapSend(rows[0]) : null;
+  },
+
   async findByWithdrawTxHash(hash: string): Promise<Send | null> {
     const { rows } = await pool.query(`select * from sends where withdraw_tx_hash = $1`, [hash]);
     return rows[0] ? mapSend(rows[0]) : null;
@@ -104,7 +109,7 @@ export const sendsRepo = {
   async updateState(
     client: PoolClient,
     id: string,
-    input: { state: SendState; withdrawTxHash?: string },
+    input: { state: SendState; withdrawTxHash?: string | null },
   ): Promise<Send> {
     const { rows } = await client.query(
       `update sends set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), updated_at = now()

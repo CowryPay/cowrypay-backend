@@ -1,5 +1,5 @@
 import { env } from "../../config/env.js";
-import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
+import type { CreatedWallet, WalletAdapter, WithdrawResult } from "./adapter.js";
 
 interface GenerateAddressResponse {
   data: {
@@ -91,46 +91,6 @@ export const blockradarWalletAdapter: WalletAdapter = {
       chain: json.data.blockchain.slug,
     };
   },
-
-  // docs.blockradar.co — POST .../addresses/{addressId}/withdraw broadcasts
-  // an outbound transfer from a per-user child address. Single-item mode
-  // only (not the batch form) — one call moves one asset to one address.
-  async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
-    const { apiKey, walletId } = requireBlockradarConfig();
-    const assetId = await resolveAssetId(apiKey, walletId, input.chain, input.tokenSymbol);
-
-    const res = await fetch(
-      `${env.blockradarBaseUrl}/wallets/${walletId}/addresses/${input.externalWalletId}/withdraw`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify({
-          assetId,
-          address: input.toAddress,
-          amount: input.amount,
-          reference: input.reference,
-        }),
-      },
-    );
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Blockradar withdraw failed (${res.status}): ${body}`);
-    }
-
-    const json = (await res.json()) as WithdrawResponse;
-    if (json.data.errors && json.data.errors.length > 0) {
-      throw new Error(`Blockradar withdraw rejected: ${JSON.stringify(json.data.errors)}`);
-    }
-
-    const hash = json.data.hash ?? json.data.success?.[0]?.id;
-    const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
-    if (!hash) {
-      throw new Error("Blockradar withdraw response had no transaction hash — response shape needs re-checking");
-    }
-
-    return { txHash: hash, status };
-  },
 };
 
 // docs.blockradar.co — POST /wallets/{walletId}/withdraw (no address
@@ -173,13 +133,16 @@ export async function withdrawFromMasterWallet(input: {
     throw new Error(`Blockradar master wallet withdraw rejected: ${JSON.stringify(json.data.errors)}`);
   }
 
-  const hash = json.data.hash ?? json.data.success?.[0]?.id;
+  // A 200 with no errors and no hash is a legitimate outcome, not a
+  // failure — confirmed live: a master-wallet withdraw can go through
+  // AML/compliance screening before broadcasting, and the API returns
+  // immediately without a hash while that's pending. The real hash arrives
+  // later via the withdraw.success webhook (routes/blockradarWebhook.ts),
+  // matched back to this send by `reference`, not by hash (we don't have
+  // one yet). Do not treat this as an error — a caller that does will mark
+  // a send FAILED and refund it while Blockradar goes on to actually pay
+  // the recipient, a real double-spend confirmed to have happened live.
+  const hash = json.data.hash ?? json.data.success?.[0]?.id ?? null;
   const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
-  if (!hash) {
-    throw new Error(
-      "Blockradar master wallet withdraw response had no transaction hash — response shape needs re-checking",
-    );
-  }
-
   return { txHash: hash, status };
 }
