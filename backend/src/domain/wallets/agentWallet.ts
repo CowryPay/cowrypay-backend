@@ -11,7 +11,9 @@ import { env } from "../../config/env.js";
 interface AgentPublicClient {
   getTransactionCount(args: { address: `0x${string}`; blockTag: "pending" }): Promise<number>;
   getBalance(args: { address: `0x${string}` }): Promise<bigint>;
-  waitForTransactionReceipt(args: { hash: `0x${string}` }): Promise<{ blockNumber: bigint }>;
+  waitForTransactionReceipt(args: {
+    hash: `0x${string}`;
+  }): Promise<{ blockNumber: bigint; status: "success" | "reverted" }>;
 }
 
 interface AgentWalletClient {
@@ -103,7 +105,15 @@ export async function agentSendTx(to: `0x${string}`, data: `0x${string}`, value 
   }
 }
 
+// waitForTransactionReceipt resolves once *a* receipt exists, regardless of
+// whether the transaction actually succeeded — a reverted transfer (e.g.
+// insufficient USDC balance in the agent wallet) still produces a receipt,
+// just with status "reverted". Checked explicitly so a reverted transfer
+// surfaces as a thrown error instead of being treated as a successful send.
 export async function waitForAgentTx(hash: `0x${string}`): Promise<void> {
   const { publicClient } = getAgentWallet();
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`Transaction ${hash} reverted on-chain`);
+  }
 }
