@@ -4,7 +4,7 @@ import { env } from "../../config/env.js";
 import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { sendUsdcFromAgent } from "../wallets/agentPayout.js";
+import { withdrawFromMasterWallet } from "../wallets/blockradarAdapter.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
@@ -40,12 +40,16 @@ export interface InitiatedSend {
 // SEND_INSTRUCTED -> ORDER_CREATED -> PAYOUT_INITIATED. Compliance screening
 // (mirroring domain/deposits/screening.ts) isn't wired yet, but the payout
 // broadcast is: once Paycrest's order is created, the net amount is paid
-// directly from the agent wallet (which holds USDC swept in from user
-// deposits, see domain/deposits/stateMachine.ts) to the order's
-// receiveAddress, and the platform fee is paid to treasury the same way —
-// neither withdraws from the sending user's own Blockradar wallet anymore.
-// SETTLING/COMPLETE arrive later via the payment_order.* webhook once
-// Paycrest confirms the deposit and completes the payout.
+// directly from Blockradar's master wallet (which every deposit lands in
+// automatically via Blockradar's own auto-sweep — confirmed live, no code
+// of ours involved) to the order's receiveAddress, and the platform fee is
+// paid to treasury the same way — neither withdraws from the sending
+// user's own Blockradar wallet. SETTLING/COMPLETE arrive later via the
+// payment_order.* webhook once Paycrest confirms the deposit and completes
+// the payout; PAYOUT_INITIATED itself may still be confirming on-chain —
+// Blockradar's own withdraw.success/withdraw.failed webhook (see
+// routes/blockradarWebhook.ts) is what would flip this to FAILED if a
+// broadcast that looked accepted doesn't actually land.
 export async function initiateSend(userId: string, input: InitiateSendInput): Promise<InitiatedSend> {
   const user = await usersRepo.findById(userId);
   if (!user) throw new Error("User not found");
@@ -135,9 +139,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     return next;
   });
 
-  let payoutTxHash: string;
+  let payout;
   try {
-    payoutTxHash = await sendUsdcFromAgent(order.receiveAddress as `0x${string}`, netAmount);
+    payout = await withdrawFromMasterWallet({
+      chain: wallet.chain,
+      tokenSymbol: env.defaultTokenSymbol,
+      toAddress: order.receiveAddress,
+      amount: netAmount,
+      reference: `${reference}-payout`,
+    });
   } catch (err) {
     await withTransaction(async (client) => {
       // Refund — the balance was debited up front to prevent double-spending
@@ -150,7 +160,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
         updated.id,
         "ORDER_CREATED",
         "FAILED",
-        `agent_payout_failed: ${err instanceof Error ? err.message : String(err)}`,
+        `blockradar_withdraw_failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
     throw new Error(
@@ -161,9 +171,9 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const final = await withTransaction(async (client) => {
     const next = await sendsRepo.updateState(client, updated.id, {
       state: "PAYOUT_INITIATED",
-      withdrawTxHash: payoutTxHash,
+      withdrawTxHash: payout.txHash,
     });
-    await sendsRepo.logTransition(client, updated.id, "ORDER_CREATED", "PAYOUT_INITIATED", "agent_payout_broadcast");
+    await sendsRepo.logTransition(client, updated.id, "ORDER_CREATED", "PAYOUT_INITIATED", "blockradar_withdraw_broadcast");
     return next;
   });
 
@@ -173,9 +183,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeTxHash = await sendUsdcFromAgent(treasuryAddress as `0x${string}`, feeAmount);
+      const feeSweep = await withdrawFromMasterWallet({
+        chain: wallet.chain,
+        tokenSymbol: env.defaultTokenSymbol,
+        toAddress: treasuryAddress,
+        amount: feeAmount,
+        reference: `${reference}-fee`,
+      });
       await withTransaction((client) =>
-        sendsRepo.logTransition(client, final.id, "PAYOUT_INITIATED", "PAYOUT_INITIATED", `fee_swept:${feeTxHash}`),
+        sendsRepo.logTransition(client, final.id, "PAYOUT_INITIATED", "PAYOUT_INITIATED", `fee_swept:${feeSweep.txHash}`),
       );
     } catch (err) {
       console.error(`Fee sweep failed for send ${final.id}:`, err);

@@ -132,3 +132,54 @@ export const blockradarWalletAdapter: WalletAdapter = {
     return { txHash: hash, status };
   },
 };
+
+// docs.blockradar.co — POST /wallets/{walletId}/withdraw (no address
+// sub-path) pays out directly from the master wallet, which is where every
+// deposit ends up anyway: this wallet has auto-sweep enabled
+// (confirmed live via a real webhook payload — isAutoSweep: true), so
+// Blockradar itself consolidates every user's deposit here immediately,
+// without any code on our side. Paying sends out from here instead of a
+// separately-held wallet means one fewer private key in existence, and
+// reuses the exact same trust model (their API key) as every other
+// Blockradar call in this codebase.
+export async function withdrawFromMasterWallet(input: {
+  chain: string;
+  tokenSymbol: string;
+  toAddress: string;
+  amount: string;
+  reference: string;
+}): Promise<WithdrawResult> {
+  const { apiKey, walletId } = requireBlockradarConfig();
+  const assetId = await resolveAssetId(apiKey, walletId, input.chain, input.tokenSymbol);
+
+  const res = await fetch(`${env.blockradarBaseUrl}/wallets/${walletId}/withdraw`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey },
+    body: JSON.stringify({
+      assetId,
+      address: input.toAddress,
+      amount: input.amount,
+      reference: input.reference,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Blockradar master wallet withdraw failed (${res.status}): ${body}`);
+  }
+
+  const json = (await res.json()) as WithdrawResponse;
+  if (json.data.errors && json.data.errors.length > 0) {
+    throw new Error(`Blockradar master wallet withdraw rejected: ${JSON.stringify(json.data.errors)}`);
+  }
+
+  const hash = json.data.hash ?? json.data.success?.[0]?.id;
+  const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
+  if (!hash) {
+    throw new Error(
+      "Blockradar master wallet withdraw response had no transaction hash — response shape needs re-checking",
+    );
+  }
+
+  return { txHash: hash, status };
+}
