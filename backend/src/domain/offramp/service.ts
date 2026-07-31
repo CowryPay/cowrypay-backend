@@ -5,6 +5,7 @@ import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { getWalletAdapter } from "../wallets/index.js";
+import { ensureGasFunded } from "../wallets/gasStation.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
@@ -127,6 +128,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
   let payout;
   try {
+    await ensureGasFunded(wallet.address, wallet.chain);
     payout = await walletAdapter.withdraw({
       externalWalletId: wallet.externalWalletId,
       chain: wallet.chain,
@@ -166,6 +168,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
+      await ensureGasFunded(wallet.address, wallet.chain);
       const feeSweep = await walletAdapter.withdraw({
         externalWalletId: wallet.externalWalletId,
         chain: wallet.chain,
