@@ -4,6 +4,7 @@ import { env } from "../config/env.js";
 import { depositsRepo } from "../domain/deposits/repository.js";
 import { ingestDeposit, resolveManualReview } from "../domain/deposits/stateMachine.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 
 export const depositsRouter = Router();
 
@@ -48,9 +49,14 @@ depositsRouter.post("/webhooks/deposit", async (req: Request, res: Response) => 
   }
 });
 
-depositsRouter.get("/deposits/:id", async (req: Request, res: Response) => {
+depositsRouter.get("/deposits", requireAuth, async (req: Request, res: Response) => {
+  const deposits = await depositsRepo.getForUser(req.authUser!.id, 20);
+  res.json({ deposits });
+});
+
+depositsRouter.get("/deposits/:id", requireAuth, async (req: Request, res: Response) => {
   const deposit = await depositsRepo.findById(req.params.id);
-  if (!deposit) {
+  if (!deposit || deposit.userId !== req.authUser!.id) {
     res.status(404).json({ error: "not found" });
     return;
   }
@@ -63,9 +69,27 @@ const ReviewSchema = z.object({
   actor: z.string().optional(),
 });
 
+// No role/permission system exists yet — gated by a shared secret header
+// instead of requireAuth (a real user JWT proves identity, not admin
+// privilege). Without this, anyone on the internet could force-approve or
+// reject a flagged deposit with no authorization at all.
+function requireAdminKey(req: Request, res: Response): boolean {
+  if (!env.adminApiKey) {
+    res.status(503).json({ error: "admin endpoint not configured" });
+    return false;
+  }
+  if (req.header("x-admin-key") !== env.adminApiKey) {
+    res.status(401).json({ error: "invalid admin key" });
+    return false;
+  }
+  return true;
+}
+
 // Closes the MANUAL_REVIEW branch of the state machine — without this, a
 // flagged deposit would have no way back to a terminal state.
 depositsRouter.post("/admin/deposits/:id/review", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+
   const parsed = ReviewSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });

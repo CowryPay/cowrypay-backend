@@ -54,4 +54,9 @@ export const env = {
   // scrypt, so this doesn't need to be exact raw key bytes. Only required
   // when a recipient is actually saved — checked lazily, not here.
   recipientEncryptionKey: process.env.RECIPIENT_ENCRYPTION_KEY,
+  // Gates POST /admin/deposits/:id/review — there's no role/permission
+  // system in this codebase yet, so this is a shared-secret header check
+  // (x-admin-key) rather than real per-admin auth. Only required when that
+  // endpoint is actually called — checked lazily, not here.
+  adminApiKey: process.env.ADMIN_API_KEY,
 };
