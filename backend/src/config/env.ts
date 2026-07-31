@@ -54,12 +54,17 @@ export const env = {
   // scrypt, so this doesn't need to be exact raw key bytes. Only required
   // when a recipient is actually saved — checked lazily, not here.
   recipientEncryptionKey: process.env.RECIPIENT_ENCRYPTION_KEY,
-  // Company-controlled EOA that tops up a user's Blockradar address with
-  // native gas right before a withdraw — Blockradar rejects withdraws
-  // outright if the source address has none (confirmed via a real failure:
+  // Company-controlled EOA — the "agent wallet". Two jobs: (1) tops up a
+  // user's Blockradar address with native gas right before a sweep (see
+  // domain/wallets/gasStation.ts) — Blockradar rejects a withdraw outright
+  // if the source address has none (confirmed via a real failure:
   // "Insufficient CELO balance for network fee, you have 0 CELO"), it does
-  // not sponsor gas itself. Only required when a send actually broadcasts —
-  // checked lazily by domain/wallets/gasStation.ts, not here.
+  // not sponsor gas itself; (2) holds swept USDC and pays sends out
+  // directly (domain/wallets/agentWallet.ts), instead of withdrawing from
+  // each user's own Blockradar wallet per send. Kept as GAS_STATION_* env
+  // names since that's what's already configured on Railway — same wallet,
+  // now with a bigger job.
   gasStationPrivateKey: process.env.GAS_STATION_PRIVATE_KEY,
   gasStationTopupAmount: process.env.GAS_STATION_TOPUP_AMOUNT ?? "0.01",
+  celoRpcUrl: process.env.CELO_RPC_URL ?? "https://forno.celo.org",
 };
