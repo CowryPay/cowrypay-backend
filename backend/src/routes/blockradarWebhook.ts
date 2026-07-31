@@ -41,7 +41,15 @@ blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: R
   }
 
   const data = req.body?.data ?? {};
-  const address = data.recipientAddress as string | undefined;
+  // Auto-sweep (enabled on this master wallet) changes what
+  // `recipientAddress` means — once a deposit sweeps, that field points at
+  // the master wallet, not the user's own address, and this event fires for
+  // the (already-swept) final state rather than the original arrival.
+  // `data.address.address` is the deposit's actual receiving address
+  // regardless of auto-sweep — confirmed against a real payload where
+  // `isAutoSweep: true`, `recipientAddress` was the master wallet, and
+  // `data.address.address` was still the correct per-user child address.
+  const address = (data.address?.address ?? data.recipientAddress) as string | undefined;
   const txHash = data.hash as string | undefined;
   const amount = data.amount;
   const tokenSymbol = data.asset?.symbol as string | undefined;
