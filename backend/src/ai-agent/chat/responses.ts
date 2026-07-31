@@ -1,5 +1,15 @@
 import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 
+// Postgres numeric(38,18) columns come back from `pg` as full-precision
+// strings (e.g. "1.000000000000000000") — trimmed here via pure string
+// manipulation, not a Number() round-trip, so this never risks the kind of
+// floating-point error that money elsewhere in this codebase is
+// deliberately kept away from (see ledgerRepo.creditAvailable).
+function formatAmount(value: string): string {
+  if (!value.includes(".")) return value;
+  return value.replace(/0+$/, "").replace(/\.$/, "");
+}
+
 export function buildWelcomeMessage(wallet: Wallet): string {
   return [
     "Welcome to CowryPay! 👋",
@@ -24,11 +34,13 @@ export function buildAddressMessage(wallet: Wallet): string {
 
 export function buildBalanceMessage(balances: LedgerBalance[], recentDeposits: Deposit[]): string {
   const balanceLines = balances.length
-    ? balances.map((b) => `• ${b.availableBalance} ${b.tokenSymbol}`).join("\n")
+    ? balances.map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join("\n")
     : "No balance yet — send USDC to your deposit address to get started.";
 
   const depositLines = recentDeposits.length
-    ? recentDeposits.map((d) => `• ${d.amount} ${d.tokenSymbol} — ${describeDepositState(d.state)}`).join("\n")
+    ? recentDeposits
+        .map((d) => `• ${formatAmount(d.amount)} ${d.tokenSymbol} — ${describeDepositState(d.state)}`)
+        .join("\n")
     : "No deposits yet.";
 
   return `💰 Balance:\n${balanceLines}\n\nRecent deposits:\n${depositLines}`;
@@ -65,7 +77,7 @@ export function buildTxHistoryMessage(sends: Send[]): string {
   }
   const lines = sends.map(
     (s) =>
-      `• ${s.amountHuman} ${s.tokenSymbol} → ${s.recipient.accountName} (${s.fiatCurrency}) — ${describeSendState(s.state)}`,
+      `• ${formatAmount(s.amountHuman)} ${s.tokenSymbol} → ${s.recipient.accountName} (${s.fiatCurrency}) — ${describeSendState(s.state)}`,
   );
   return `📜 Recent sends:\n${lines.join("\n")}`;
 }
