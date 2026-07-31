@@ -1,4 +1,4 @@
-import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
+import type { LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 
 // Postgres numeric(38,18) columns come back from `pg` as full-precision
 // strings (e.g. "1.000000000000000000") — trimmed here via pure string
@@ -32,39 +32,18 @@ export function buildAddressMessage(wallet: Wallet): string {
   ].join("\n");
 }
 
-export function buildBalanceMessage(balances: LedgerBalance[], recentDeposits: Deposit[]): string {
+export function buildBalanceMessage(balances: LedgerBalance[]): string {
   const balanceLines = balances.length
     ? balances.map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join("\n")
     : "No balance yet — send USDC to your deposit address to get started.";
 
-  const depositLines = recentDeposits.length
-    ? recentDeposits
-        .map((d) => `• ${formatAmount(d.amount)} ${d.tokenSymbol} — ${describeDepositState(d.state)}`)
-        .join("\n")
-    : "No deposits yet.";
-
-  return `💰 Balance:\n${balanceLines}\n\nRecent deposits:\n${depositLines}`;
-}
-
-function describeDepositState(state: DepositState): string {
-  switch (state) {
-    case "BALANCE_CREDITED":
-      return "credited ✅";
-    case "MANUAL_REVIEW":
-      return "under review";
-    case "DEPOSIT_HELD":
-      return "held";
-    case "RETURN_TO_SENDER":
-      return "returned";
-    default:
-      return "processing";
-  }
+  return `💰 Balance:\n${balanceLines}`;
 }
 
 export function buildHelpMessage(): string {
   return [
     "Here's what I can help with right now:",
-    `• "What's my balance?" — check your available balance and recent deposits`,
+    `• "What's my balance?" — check your available balance`,
     `• "What's my deposit address?" — get your wallet address again`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "My transactions" — see your recent sends`,

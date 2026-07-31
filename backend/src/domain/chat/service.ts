@@ -1,4 +1,3 @@
-import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -57,11 +56,8 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   if (intent === "balance") {
     await touchSession(userId);
-    const [balances, deposits] = await Promise.all([
-      ledgerRepo.getBalancesForUser(userId),
-      depositsRepo.getForUser(userId, 5),
-    ]);
-    return { reply: buildBalanceMessage(balances, deposits) };
+    const balances = await ledgerRepo.getBalancesForUser(userId);
+    return { reply: buildBalanceMessage(balances) };
   }
 
   if (intent === "txHistory") {
@@ -103,11 +99,8 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   if (parsed?.kind === "admin") {
     if (parsed.action === "BALANCE") {
-      const [balances, deposits] = await Promise.all([
-        ledgerRepo.getBalancesForUser(userId),
-        depositsRepo.getForUser(userId, 5),
-      ]);
-      return { reply: buildBalanceMessage(balances, deposits) };
+      const balances = await ledgerRepo.getBalancesForUser(userId);
+      return { reply: buildBalanceMessage(balances) };
     }
     if (parsed.action === "TX_HISTORY") {
       const sends = await sendsRepo.getForUser(userId, 5);
