@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import { getInstitutions, getOfframpRate, verifyRecipientAccount } from "../domain/offramp/paycrestAdapter.js";
 import { initiateSend } from "../domain/offramp/service.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
+import { formatAmount } from "../utils/format.js";
 
 export const offrampRouter = Router();
 
@@ -121,4 +122,53 @@ offrampRouter.get("/offramp/sends/:id", requireAuth, async (req: Request, res: R
 offrampRouter.get("/offramp/sends", requireAuth, async (req: Request, res: Response) => {
   const sends = await sendsRepo.getForUser(req.authUser!.id);
   res.json({ sends });
+});
+
+// Data only, not a rendered file (Option B — see the send-a-receipt
+// discussion) — the frontend shapes this into whatever it actually needs
+// (in-app view, share text, a client-side PDF), instead of the backend
+// taking on PDF rendering as a concern of its own. Scoped to COMPLETE sends
+// only — a receipt for money that hasn't actually moved yet isn't a receipt.
+offrampRouter.get("/offramp/sends/:id/receipt", requireAuth, async (req: Request, res: Response) => {
+  const send = await sendsRepo.findById(req.params.id);
+  if (!send || send.userId !== req.authUser!.id) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (send.state !== "COMPLETE") {
+    res.status(400).json({ error: "receipt is only available once a send has completed" });
+    return;
+  }
+
+  const transitions = await sendsRepo.getTransitions(send.id);
+  const completedAt = transitions.find((t) => t.toState === "COMPLETE")?.createdAt ?? send.updatedAt;
+
+  const feeAmount = send.feeAmount ?? "0";
+  const netAmount = String(Number(send.amountHuman) - Number(feeAmount));
+  const fiatAmountReceived =
+    send.rate != null && Number.isFinite(Number(send.rate)) ? Number(netAmount) * Number(send.rate) : null;
+
+  const last4 = send.recipient.accountIdentifier.slice(-4);
+
+  res.json({
+    receipt: {
+      reference: send.reference,
+      amountSent: formatAmount(send.amountHuman),
+      tokenSymbol: send.tokenSymbol,
+      feeAmount: formatAmount(feeAmount),
+      netAmount: formatAmount(netAmount),
+      rate: send.rate,
+      fiatCurrency: send.fiatCurrency,
+      fiatAmountReceived: fiatAmountReceived != null ? fiatAmountReceived.toFixed(2) : null,
+      recipient: {
+        accountName: send.recipient.accountName,
+        accountIdentifierMasked: `••••${last4}`,
+        institutionName: send.recipient.institutionName ?? send.recipient.institution,
+      },
+      status: send.state,
+      createdAt: send.createdAt,
+      completedAt,
+      withdrawTxHash: send.withdrawTxHash,
+    },
+  });
 });
