@@ -1,3 +1,4 @@
+import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -62,8 +63,11 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   if (intent === "txHistory") {
     await touchSession(userId);
-    const sends = await sendsRepo.getForUser(userId, 5);
-    return { reply: buildTxHistoryMessage(sends) };
+    const [sends, deposits] = await Promise.all([
+      sendsRepo.getForUser(userId, 5),
+      depositsRepo.getForUser(userId, 5),
+    ]);
+    return { reply: buildTxHistoryMessage(sends, deposits) };
   }
 
   if (intent === "help") {
@@ -103,8 +107,11 @@ export async function handleChatMessage(userId: string, message: string): Promis
       return { reply: buildBalanceMessage(balances) };
     }
     if (parsed.action === "TX_HISTORY") {
-      const sends = await sendsRepo.getForUser(userId, 5);
-      return { reply: buildTxHistoryMessage(sends) };
+      const [sends, deposits] = await Promise.all([
+        sendsRepo.getForUser(userId, 5),
+        depositsRepo.getForUser(userId, 5),
+      ]);
+      return { reply: buildTxHistoryMessage(sends, deposits) };
     }
     if (parsed.action === "HELP") {
       return { reply: buildHelpMessage() };

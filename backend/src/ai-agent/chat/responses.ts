@@ -1,4 +1,4 @@
-import type { LedgerBalance, Send, SendState, Wallet } from "../../types.js";
+import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 
 // Postgres numeric(38,18) columns come back from `pg` as full-precision
 // strings (e.g. "1.000000000000000000") — trimmed here via pure string
@@ -46,19 +46,29 @@ export function buildHelpMessage(): string {
     `• "What's my balance?" — check your available balance`,
     `• "What's my deposit address?" — get your wallet address again`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
-    `• "My transactions" — see your recent sends`,
+    `• "My transactions" — see your recent activity`,
   ].join("\n");
 }
 
-export function buildTxHistoryMessage(sends: Send[]): string {
-  if (sends.length === 0) {
-    return `No sends yet — try "send $50 to a bank account in Nigeria" to make your first one.`;
+export function buildTxHistoryMessage(sends: Send[], deposits: Deposit[]): string {
+  if (sends.length === 0 && deposits.length === 0) {
+    return `No activity yet — send USDC to your deposit address, or try "send $50 to a bank account in Nigeria".`;
   }
-  const lines = sends.map(
-    (s) =>
-      `• ${formatAmount(s.amountHuman)} ${s.tokenSymbol} → ${s.recipient.accountName} (${s.fiatCurrency}) — ${describeSendState(s.state)}`,
-  );
-  return `📜 Recent sends:\n${lines.join("\n")}`;
+
+  const sendLines = sends.map((s) => ({
+    createdAt: s.createdAt,
+    text: `• Sent ${formatAmount(s.amountHuman)} ${s.tokenSymbol} → ${s.recipient.accountName} (${s.fiatCurrency}) — ${describeSendState(s.state)}`,
+  }));
+  const depositLines = deposits.map((d) => ({
+    createdAt: d.createdAt,
+    text: `• Received ${formatAmount(d.amount)} ${d.tokenSymbol} — ${describeDepositState(d.state)}`,
+  }));
+
+  const lines = [...sendLines, ...depositLines]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map((l) => l.text);
+
+  return `📜 Recent activity:\n${lines.join("\n")}`;
 }
 
 function describeSendState(state: SendState): string {
@@ -72,6 +82,21 @@ function describeSendState(state: SendState): string {
       return "failed";
     case "REFUNDED":
       return "refunded";
+    default:
+      return "processing";
+  }
+}
+
+function describeDepositState(state: DepositState): string {
+  switch (state) {
+    case "BALANCE_CREDITED":
+      return "credited ✅";
+    case "MANUAL_REVIEW":
+      return "under review";
+    case "DEPOSIT_HELD":
+      return "held";
+    case "RETURN_TO_SENDER":
+      return "returned";
     default:
       return "processing";
   }
