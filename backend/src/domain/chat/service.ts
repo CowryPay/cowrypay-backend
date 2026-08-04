@@ -6,6 +6,7 @@ import { classifyIntent } from "../../ai-agent/chat/intent.js";
 import {
   buildAddressMessage,
   buildBalanceMessage,
+  buildChainsMessage,
   buildHelpMessage,
   buildTxHistoryMessage,
   buildWelcomeMessage,
@@ -68,6 +69,13 @@ export async function handleChatMessage(userId: string, message: string): Promis
       depositsRepo.getForUser(userId, 5),
     ]);
     return { reply: buildTxHistoryMessage(sends, deposits) };
+  }
+
+  if (intent === "chains") {
+    await touchSession(userId);
+    const wallet = await walletsRepo.findByUserId(userId);
+    if (!wallet) throw new Error("No wallet found for user");
+    return { reply: buildChainsMessage(wallet) };
   }
 
   if (intent === "help") {

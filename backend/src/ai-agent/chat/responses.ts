@@ -32,6 +32,11 @@ export function buildAddressMessage(wallet: Wallet): string {
   ].join("\n");
 }
 
+export function buildChainsMessage(wallet: Wallet): string {
+  const chainName = wallet.chain.charAt(0).toUpperCase() + wallet.chain.slice(1);
+  return `Your deposit address runs on ${chainName} — send USDC there and it'll be picked up automatically. That's the only network supported right now.`;
+}
+
 export function buildBalanceMessage(balances: LedgerBalance[]): string {
   const balanceLines = balances.length
     ? balances.map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join("\n")
@@ -45,6 +50,7 @@ export function buildHelpMessage(): string {
     "Here's what I can help with right now:",
     `• "What's my balance?" — check your available balance`,
     `• "What's my deposit address?" — get your wallet address again`,
+    `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "My transactions" — see your recent activity`,
   ].join("\n");
