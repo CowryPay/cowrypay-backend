@@ -251,12 +251,20 @@ export async function resolveRemittanceIntent(
     };
   }
 
+  // The user may have re-entered this account fresh instead of referencing
+  // it by nickname — check whether it's already saved under one so `memo`
+  // still gets set. The frontend reads memo's presence as "already saved";
+  // leaving it unset here for an already-saved account is exactly what was
+  // prompting users to save the same recipient again on a second transfer.
+  const alreadySaved = await recipientsRepo.findByAccountIdentifier(userId, matched.code, intent.accountIdentifier);
+  const nicknameForMemo = intent.recipientNickname ?? alreadySaved?.nickname;
+
   const recipient: SendRecipient = {
     institution: matched.code,
     institutionName: matched.name,
     accountIdentifier: intent.accountIdentifier,
     accountName: verified.accountName,
-    ...(intent.recipientNickname ? { memo: intent.recipientNickname } : {}),
+    ...(nicknameForMemo ? { memo: nicknameForMemo } : {}),
   };
 
   return finalizeRemittanceDraft(

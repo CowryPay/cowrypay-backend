@@ -44,6 +44,25 @@ export const recipientsRepo = {
     return rows.map(mapRow);
   },
 
+  // account_identifier_encrypted can't be searched by SQL equality — AES-GCM
+  // uses a random IV per encryption, so the same plaintext never produces
+  // the same ciphertext twice. Decrypts and compares in memory instead;
+  // fine at this scale (a handful of saved recipients per user at most).
+  // Used to recognize "this exact account is already saved" even when the
+  // user re-enters it fresh instead of referencing it by nickname — without
+  // this, the caller has no way to tell the frontend not to prompt to save
+  // an already-saved recipient again.
+  async findByAccountIdentifier(
+    userId: string,
+    institution: string,
+    accountIdentifier: string,
+  ): Promise<SavedRecipient | null> {
+    const all = await recipientsRepo.getForUser(userId);
+    return (
+      all.find((r) => r.institution === institution && r.accountIdentifier === accountIdentifier) ?? null
+    );
+  },
+
   // Upsert on (user_id, nickname) — re-saving "mom" with new details just
   // updates the existing record rather than erroring or duplicating.
   async save(
