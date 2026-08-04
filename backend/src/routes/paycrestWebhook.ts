@@ -12,6 +12,16 @@ export const paycrestWebhookRouter = Router();
 // event per their docs).
 paycrestWebhookRouter.post("/webhooks/paycrest", async (req: Request, res: Response) => {
   const signature = req.header("x-paycrest-signature");
+
+  // TEMPORARY diagnostic — remove once PAYCREST_API_SECRET is confirmed.
+  // No distinct "webhook secret" has turned up anywhere on Paycrest's
+  // dashboard despite their docs naming one separately from the API Key,
+  // so this captures a real signature + exact raw body to test candidate
+  // secrets against offline (starting with the API Key itself) instead of
+  // guessing blind or waiting on support.
+  console.log(`[paycrest webhook] signature=${signature}`);
+  console.log(`[paycrest webhook] rawBody=${req.rawBody?.toString("utf8")}`);
+
   if (!verifyPaycrestSignature(req.rawBody, signature)) {
     res.status(401).json({ error: "invalid signature" });
     return;
