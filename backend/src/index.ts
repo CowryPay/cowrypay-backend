@@ -15,6 +15,7 @@ import { pinRouter } from "./routes/pin.js";
 import { recipientsRouter } from "./routes/recipients.js";
 import { signupRouter } from "./routes/signup.js";
 import { usersRouter } from "./routes/users.js";
+import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -35,3 +36,5 @@ app.use(chatRouter);
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
 });
+
+startWithdrawConfirmationPoller();

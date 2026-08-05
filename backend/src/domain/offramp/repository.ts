@@ -19,6 +19,7 @@ function mapSend(row: any): Send {
     providerOrderId: row.provider_order_id,
     reference: row.reference,
     withdrawTxHash: row.withdraw_tx_hash,
+    withdrawConfirmedAt: row.withdraw_confirmed_at,
     state: row.state,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -148,5 +149,21 @@ export const sendsRepo = {
       [sendId],
     );
     return rows.map(mapTransition);
+  },
+
+  // Sends broadcast (via any wallet adapter) but not yet checked for a
+  // final on-chain outcome — withdraw_confirmed_at is only ever set once a
+  // receipt is actually seen, so this naturally excludes anything already
+  // processed by the confirmation poller.
+  async findPendingKmsWithdrawals(): Promise<Send[]> {
+    const { rows } = await pool.query(
+      `select * from sends
+       where state = 'PAYOUT_INITIATED' and withdraw_tx_hash is not null and withdraw_confirmed_at is null`,
+    );
+    return rows.map(mapSend);
+  },
+
+  async markWithdrawConfirmed(client: PoolClient, id: string): Promise<void> {
+    await client.query(`update sends set withdraw_confirmed_at = now() where id = $1`, [id]);
   },
 };

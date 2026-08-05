@@ -102,6 +102,7 @@ export interface Send {
   providerOrderId: string | null;
   reference: string;
   withdrawTxHash: string | null;
+  withdrawConfirmedAt: string | null;
   state: SendState;
   createdAt: string;
   updatedAt: string;
