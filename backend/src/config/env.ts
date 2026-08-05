@@ -63,4 +63,9 @@ export const env = {
   awsRegion: process.env.AWS_REGION,
   awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
   awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  // The single KMS key every aws-kms withdraw() call signs with — mirrors
+  // BLOCKRADAR_WALLET_ID being one fixed master payout wallet today, not a
+  // per-user key. Only required when walletProvider === "aws-kms".
+  awsKmsPayoutKeyArn: process.env.AWS_KMS_PAYOUT_KEY_ARN,
+  celoRpcUrl: process.env.CELO_RPC_URL ?? "https://forno.celo.org",
 };

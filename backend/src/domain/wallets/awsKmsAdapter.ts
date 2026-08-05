@@ -1,5 +1,17 @@
-import { KMSClient, CreateKeyCommand, CreateAliasCommand, GetPublicKeyCommand } from "@aws-sdk/client-kms";
+import { KMSClient, CreateKeyCommand, CreateAliasCommand, GetPublicKeyCommand, SignCommand } from "@aws-sdk/client-kms";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
+import { toAccount } from "viem/accounts";
+import {
+  createWalletClient,
+  http,
+  serializeTransaction,
+  keccak256,
+  numberToHex,
+  encodeFunctionData,
+  parseUnits,
+} from "viem";
+import { celo } from "viem/chains";
 import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 
@@ -36,10 +48,115 @@ function rawPointFromDerSpki(der: Uint8Array): Uint8Array {
 
 // Standard EVM address derivation: keccak256 of the raw 64-byte X||Y
 // (point with the 0x04 prefix stripped), last 20 bytes.
-export function addressFromRawPoint(point: Uint8Array): string {
+export function addressFromRawPoint(point: Uint8Array): `0x${string}` {
   const hash = keccak_256(point.slice(1));
   return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
 }
+
+async function fetchAddressForKey(client: KMSClient, keyId: string): Promise<`0x${string}`> {
+  const pub = await client.send(new GetPublicKeyCommand({ KeyId: keyId }));
+  if (!pub.PublicKey) {
+    throw new Error("KMS GetPublicKey did not return a public key");
+  }
+  return addressFromRawPoint(rawPointFromDerSpki(pub.PublicKey));
+}
+
+// secp256k1's curve order — a public, standard constant (the same curve
+// Bitcoin/Ethereum use), needed to normalize a KMS signature into the
+// low-S form EVM chains require (EIP-2). KMS doesn't guarantee low-S.
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+// KMS never exposes r/s/recovery directly — just a DER-encoded (r, s) pair
+// with no recovery bit. Both are recovered here the same way Phase 1's
+// verification script proved out: normalize to low-S by hand (negating s
+// invalidates whichever recovery bit was implicit, so it's re-derived
+// fresh below rather than inferred), then try both candidate recovery
+// bits against the digest and keep whichever recovers back to this key's
+// known address.
+async function kmsSignDigest(
+  client: KMSClient,
+  keyArn: string,
+  digest: Uint8Array,
+  expectedAddress: `0x${string}`,
+): Promise<{ r: bigint; s: bigint; recovery: 0 | 1 }> {
+  const signed = await client.send(
+    new SignCommand({
+      KeyId: keyArn,
+      Message: digest,
+      MessageType: "DIGEST",
+      SigningAlgorithm: "ECDSA_SHA_256",
+    }),
+  );
+  if (!signed.Signature) {
+    throw new Error("KMS Sign did not return a signature");
+  }
+
+  let sig = secp256k1.Signature.fromBytes(signed.Signature, "der");
+  if (sig.hasHighS()) {
+    sig = new secp256k1.Signature(sig.r, SECP256K1_N - sig.s);
+  }
+
+  for (const recovery of [0, 1] as const) {
+    const point = sig.addRecoveryBit(recovery).recoverPublicKey(digest);
+    const candidate = addressFromRawPoint(point.toBytes(false));
+    if (candidate.toLowerCase() === expectedAddress.toLowerCase()) {
+      return { r: sig.r, s: sig.s, recovery };
+    }
+  }
+  throw new Error(`Could not determine the recovery bit for a KMS signature (key ${keyArn})`);
+}
+
+// The documented viem pattern for HSM/KMS-backed signing: a "Custom
+// Account" whose signTransaction implementation is supplied by us. viem
+// still owns transaction building (nonce/gas/serialization) — it just
+// never sees a private key; the digest goes to KMS and the signature
+// comes back, mirroring exactly how viem's own privateKeyToAccount signs
+// (see node_modules/viem/accounts/utils/sign.ts), with KMS standing in
+// for the local secp256k1.sign call.
+function kmsAccountFromKey(keyArn: string, address: `0x${string}`) {
+  return toAccount({
+    address,
+    async signTransaction(transaction, opts) {
+      const client = kmsClient();
+      const serializer = opts?.serializer ?? serializeTransaction;
+      const unsignedSerialized = await serializer(transaction);
+      const digest = keccak256(unsignedSerialized, "bytes");
+      const { r, s, recovery } = await kmsSignDigest(client, keyArn, digest, address);
+      const signature = {
+        r: numberToHex(r, { size: 32 }),
+        s: numberToHex(s, { size: 32 }),
+        v: recovery ? 28n : 27n,
+        yParity: recovery,
+      };
+      return serializer(transaction, signature);
+    },
+    async signMessage() {
+      throw new Error("aws-kms account: message signing not supported (transactions only)");
+    },
+    async signTypedData() {
+      throw new Error("aws-kms account: typed-data signing not supported (transactions only)");
+    },
+  });
+}
+
+// Recovered from this repo's history (the earlier, since-reverted
+// self-custody signer) — confirmed on-chain via symbol()/decimals() at the
+// time, not re-derived here.
+const CELO_USDC_ADDRESS = "0xcebA9300f2b948710d2653dD7B07f33A8B32118C" as const;
+const USDC_DECIMALS = 6;
+
+const ERC20_TRANSFER_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
 
 // docs.aws.amazon.com/kms — a KMS key never exposes its private key
 // material; every signature is requested via the Sign API. One
@@ -70,12 +187,7 @@ export const awsKmsWalletAdapter: WalletAdapter = {
       }),
     );
 
-    const pub = await client.send(new GetPublicKeyCommand({ KeyId: keyId }));
-    if (!pub.PublicKey) {
-      throw new Error("KMS GetPublicKey did not return a public key");
-    }
-    const rawPoint = rawPointFromDerSpki(pub.PublicKey);
-    const address = addressFromRawPoint(rawPoint);
+    const address = await fetchAddressForKey(client, keyId);
 
     return {
       externalWalletId: keyArn,
@@ -84,9 +196,53 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     };
   },
 
-  async withdraw(_input: WithdrawInput): Promise<WithdrawResult> {
-    throw new Error(
-      "aws-kms withdraw is not implemented yet — Phase 1 only covers wallet creation, see the wallet-migration plan",
-    );
+  // Phase 2: real signing + broadcasting, Celo/USDC only for now (matches
+  // current production behavior — broader multi-chain support is later
+  // work once this one chain is proven, not designed for speculatively
+  // here). Pays out from a single designated KMS key (AWS_KMS_PAYOUT_KEY_ARN)
+  // rather than per-user signing — mirrors Blockradar's own master-wallet
+  // model today (one wallet, pooled by auto-sweep, pays every send out),
+  // avoiding nonce-management complexity across many keys.
+  async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
+    if (input.chain.toLowerCase() !== "celo") {
+      throw new Error(`aws-kms withdraw only supports Celo right now (got chain=${input.chain})`);
+    }
+    if (input.tokenSymbol.toUpperCase() !== "USDC") {
+      throw new Error(`aws-kms withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
+    }
+    if (!env.awsKmsPayoutKeyArn) {
+      throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set when WALLET_PROVIDER=aws-kms");
+    }
+
+    const client = kmsClient();
+    const payoutAddress = await fetchAddressForKey(client, env.awsKmsPayoutKeyArn);
+    const account = kmsAccountFromKey(env.awsKmsPayoutKeyArn, payoutAddress);
+
+    const walletClient = createWalletClient({
+      account,
+      chain: celo,
+      transport: http(env.celoRpcUrl),
+    });
+
+    const data = encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: "transfer",
+      args: [input.toAddress as `0x${string}`, parseUnits(input.amount, USDC_DECIMALS)],
+    });
+
+    // Broadcast and return immediately — do NOT block on a receipt here.
+    // The double-spend bug this codebase already hit once
+    // (blockradarAdapter.ts) came from treating an ambiguous pending state
+    // as a failure; waiting on confirmation inside withdraw() risks the
+    // same mistake in a new shape (a receipt-poll timeout looking like a
+    // failure while the transaction actually lands). Revert/confirmation
+    // checking is deliberately deferred — see the Phase 2 plan.
+    const txHash = await walletClient.sendTransaction({
+      to: CELO_USDC_ADDRESS,
+      data,
+      value: 0n,
+    });
+
+    return { txHash, status: "PENDING" };
   },
 };
