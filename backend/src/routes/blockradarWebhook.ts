@@ -90,19 +90,24 @@ blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: R
     return;
   }
 
-  if (event !== "deposit.success") {
+  // Confirmed live: a wallet with autoSweeping.threshold=0 (sweep every
+  // deposit immediately) sends `deposit.swept.success`, not
+  // `deposit.success` — a real deposit was silently missed because this
+  // handler only ever recognized the latter. Both carry the same fields we
+  // need (data.address.address, data.hash, data.amount, data.asset.symbol)
+  // and crediting is idempotent on (chain, tx_hash) either way (see
+  // depositsRepo.insertIfNew), so treating them identically is safe even
+  // if Blockradar ever sends both for the same deposit.
+  if (event !== "deposit.success" && event !== "deposit.swept.success") {
     res.status(200).json({ ok: true, ignored: event });
     return;
   }
 
-  // Auto-sweep (enabled on this master wallet) changes what
-  // `recipientAddress` means — once a deposit sweeps, that field points at
-  // the master wallet, not the user's own address, and this event fires for
-  // the (already-swept) final state rather than the original arrival.
-  // `data.address.address` is the deposit's actual receiving address
-  // regardless of auto-sweep — confirmed against a real payload where
-  // `isAutoSweep: true`, `recipientAddress` was the master wallet, and
-  // `data.address.address` was still the correct per-user child address.
+  // `data.address.address` is the deposit's actual receiving (child
+  // wallet) address — the more reliable field to key off. `recipientAddress`
+  // has been observed pointing at either the child wallet or the master
+  // wallet depending on the event/sweep configuration (confirmed against
+  // two different real payloads), so it's only a fallback.
   const address = (data.address?.address ?? data.recipientAddress) as string | undefined;
   const txHash = data.hash as string | undefined;
   const amount = data.amount;
@@ -117,6 +122,11 @@ blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: R
   if (!wallet) {
     // Shouldn't happen — every address we generate is stored immediately —
     // but ack anyway so Blockradar doesn't retry something we can't act on.
+    // Logged loudly (unlike before) since a 200 ack here means Blockradar
+    // considers delivery successful and never retries — this was
+    // previously a silent failure mode: the deposit just never gets
+    // credited, with nothing anywhere surfacing it as a problem.
+    console.error(`[blockradar webhook] ${event} for unrecognized address: ${address} (tx ${txHash})`);
     res.status(200).json({ ok: true, ignored: "no wallet registered for this address" });
     return;
   }
