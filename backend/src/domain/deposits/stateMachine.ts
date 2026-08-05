@@ -23,14 +23,27 @@ export async function ingestDeposit(input: {
     return deposit;
   });
 
-  if (!inserted) {
-    const existing = await depositsRepo.findByChainAndTxHash(input.chain, input.txHash);
-    if (!existing) throw new Error("Deposit insert conflicted but no existing row was found");
-    return { deposit: existing, alreadyProcessed: true };
+  if (inserted) {
+    const processed = await runScreening(inserted.id);
+    return { deposit: processed, alreadyProcessed: false };
   }
 
-  const processed = await runScreening(inserted.id);
-  return { deposit: processed, alreadyProcessed: false };
+  // A row already existed for this (chain, tx_hash) — normally a genuine
+  // retry of an already-fully-processed deposit, but it can also mean a
+  // prior attempt got interrupted after committing DEPOSIT_DETECTED but
+  // before runScreening ran or completed (that transaction is atomic, so
+  // an interrupted attempt always leaves the row here, never partway
+  // through screening — confirmed against a real stuck deposit). Resume
+  // screening for that case instead of treating "a row exists" as "fully
+  // processed" — that's what let a deposit get stuck forever, invisibly,
+  // since every retry used to short-circuit right here.
+  const existing = await depositsRepo.findByChainAndTxHash(input.chain, input.txHash);
+  if (!existing) throw new Error("Deposit insert conflicted but no existing row was found");
+  if (existing.state === "DEPOSIT_DETECTED") {
+    const processed = await runScreening(existing.id);
+    return { deposit: processed, alreadyProcessed: false };
+  }
+  return { deposit: existing, alreadyProcessed: true };
 }
 
 async function runScreening(depositId: string): Promise<Deposit> {
