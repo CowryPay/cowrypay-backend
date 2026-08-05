@@ -158,7 +158,6 @@ offrampRouter.get("/offramp/sends/:id/receipt", requireAuth, async (req: Request
       reference: send.reference,
       amountSent: formatAmount(send.amountHuman),
       tokenSymbol: send.tokenSymbol,
-      rate: send.rate,
       fiatCurrency: send.fiatCurrency,
       fiatAmountReceived: fiatAmountReceived != null ? fiatAmountReceived.toFixed(2) : null,
       recipient: {
