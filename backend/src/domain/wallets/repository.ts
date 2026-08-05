@@ -26,13 +26,18 @@ export const walletsRepo = {
     return rows[0] ? mapWallet(rows[0]) : null;
   },
 
-  async create(client: PoolClient, userId: string, created: CreatedWallet): Promise<Wallet> {
+  async create(client: PoolClient, userId: string, created: CreatedWallet, provider: string): Promise<Wallet> {
     const { rows } = await client.query(
-      `insert into wallets (user_id, external_wallet_id, address, chain)
-       values ($1, $2, $3, $4)
+      `insert into wallets (user_id, provider, external_wallet_id, address, chain)
+       values ($1, $2, $3, $4, $5)
        returning *`,
-      [userId, created.externalWalletId, created.address, created.chain],
+      [userId, provider, created.externalWalletId, created.address, created.chain],
     );
     return mapWallet(rows[0]);
+  },
+
+  async listByProvider(provider: string): Promise<Wallet[]> {
+    const { rows } = await pool.query(`select * from wallets where provider = $1`, [provider]);
+    return rows.map(mapWallet);
   },
 };

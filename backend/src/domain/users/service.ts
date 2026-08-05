@@ -1,4 +1,5 @@
 import { withTransaction } from "../../db/pool.js";
+import { env } from "../../config/env.js";
 import type { User, Wallet } from "../../types.js";
 import { getWalletAdapter } from "../wallets/index.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -28,7 +29,7 @@ export async function ensureAccount(authUser: {
   try {
     return await withTransaction(async (client) => {
       const user = await usersRepo.create(client, { id: authUser.id, email: authUser.email, phone: null });
-      const wallet = await walletsRepo.create(client, user.id, createdWallet);
+      const wallet = await walletsRepo.create(client, user.id, createdWallet, env.walletProvider);
       return { user, wallet, created: true };
     });
   } catch (err) {
