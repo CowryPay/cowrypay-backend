@@ -35,18 +35,20 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     rpcUrl: env.baseRpcUrl,
     usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     usdcDecimals: 6,
-    // Base is an L2 with very cheap gas — a starting point, worth tuning
-    // operationally rather than treated as precisely calibrated.
-    gasTopUpAmount: parseEther("0.0005"),
-    gasBufferThreshold: parseEther("0.0002"),
+    // Base is an L2 with very cheap gas (a standard ERC-20 transfer costs a
+    // small fraction of this) — a starting point, worth tuning
+    // operationally rather than treated as precisely calibrated. Lowered
+    // from an initial, overly generous 0.0005 after real-world testing.
+    gasTopUpAmount: parseEther("0.0001"),
+    gasBufferThreshold: parseEther("0.00003"),
   },
   optimism: {
     viemChain: optimism,
     rpcUrl: env.optimismRpcUrl,
     usdcAddress: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
     usdcDecimals: 6,
-    gasTopUpAmount: parseEther("0.0005"),
-    gasBufferThreshold: parseEther("0.0002"),
+    gasTopUpAmount: parseEther("0.0001"),
+    gasBufferThreshold: parseEther("0.00003"),
   },
 };
 
