@@ -112,8 +112,14 @@ async function finalizeRemittanceDraft(
   // reasonable default; the real "not enough funds" error surfaces later,
   // atomically, at actual debit time (domain/offramp/service.ts) — this is
   // only about which chain, not whether there's enough there.
+  // A balance row's chain can be null on the shared database in its
+  // current (temporarily reverted, post-incident) state — normalized to
+  // wallet.chain here so nothing downstream has to guard against it
+  // individually (a real null previously crashed the chainHint match below).
   const balances = await ledgerRepo.getBalancesForUser(userId);
-  const fundedChains = balances.filter((b) => b.tokenSymbol === env.defaultTokenSymbol && Number(b.availableBalance) > 0);
+  const fundedChains = balances
+    .filter((b) => b.tokenSymbol === env.defaultTokenSymbol && Number(b.availableBalance) > 0)
+    .map((b) => ({ ...b, chain: b.chain ?? wallet.chain }));
 
   let chain: string;
   if (chainHint) {
