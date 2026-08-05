@@ -68,4 +68,6 @@ export const env = {
   // per-user key. Only required when walletProvider === "aws-kms".
   awsKmsPayoutKeyArn: process.env.AWS_KMS_PAYOUT_KEY_ARN,
   celoRpcUrl: process.env.CELO_RPC_URL ?? "https://forno.celo.org",
+  baseRpcUrl: process.env.BASE_RPC_URL ?? "https://mainnet.base.org",
+  optimismRpcUrl: process.env.OPTIMISM_RPC_URL ?? "https://mainnet.optimism.io",
 };

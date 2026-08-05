@@ -1,6 +1,6 @@
 import { withTransaction } from "../../db/pool.js";
 import { env } from "../../config/env.js";
-import { getReceiptStatus } from "../wallets/celoReceiptStatus.js";
+import { getReceiptStatus } from "../wallets/receiptStatus.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "./repository.js";
 
@@ -16,7 +16,7 @@ export async function checkPendingWithdrawals(): Promise<void> {
   for (const send of pending) {
     try {
       if (!send.withdrawTxHash) continue; // findPendingKmsWithdrawals already filters this, guarding for TS
-      const status = await getReceiptStatus(send.withdrawTxHash);
+      const status = await getReceiptStatus(send.chain, send.withdrawTxHash);
 
       if (status === "pending") {
         continue; // not yet mined — try again next cycle

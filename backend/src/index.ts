@@ -16,7 +16,8 @@ import { recipientsRouter } from "./routes/recipients.js";
 import { signupRouter } from "./routes/signup.js";
 import { usersRouter } from "./routes/users.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
-import { startCeloDepositScanner } from "./domain/deposits/celoDepositScanner.js";
+import { startDepositScanner } from "./domain/deposits/depositScanner.js";
+import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -39,4 +40,5 @@ app.listen(env.port, () => {
 });
 
 startWithdrawConfirmationPoller();
-startCeloDepositScanner();
+startDepositScanner();
+startDepositSweeper();

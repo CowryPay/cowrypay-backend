@@ -11,8 +11,8 @@ import {
   encodeFunctionData,
   parseUnits,
 } from "viem";
-import { celo } from "viem/chains";
 import { env } from "../../config/env.js";
+import { getChainConfig } from "./chains.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 
 function requireAwsConfig(): { region: string; accessKeyId: string; secretAccessKey: string } {
@@ -59,6 +59,14 @@ async function fetchAddressForKey(client: KMSClient, keyId: string): Promise<`0x
     throw new Error("KMS GetPublicKey did not return a public key");
   }
   return addressFromRawPoint(rawPointFromDerSpki(pub.PublicKey));
+}
+
+// Public wrapper around fetchAddressForKey — depositSweeper.ts needs the
+// payout key's own address (to build its signing account and as the sweep
+// destination) without reaching into this module's private KMS client
+// management.
+export async function getWalletAddress(keyArn: string): Promise<`0x${string}`> {
+  return fetchAddressForKey(kmsClient(), keyArn);
 }
 
 // secp256k1's curve order — a public, standard constant (the same curve
@@ -113,7 +121,10 @@ async function kmsSignDigest(
 // comes back, mirroring exactly how viem's own privateKeyToAccount signs
 // (see node_modules/viem/accounts/utils/sign.ts), with KMS standing in
 // for the local secp256k1.sign call.
-function kmsAccountFromKey(keyArn: string, address: `0x${string}`) {
+// Exported for reuse by anything that needs to sign from a KMS key other
+// than the fixed payout key (e.g. depositSweeper.ts, which signs from each
+// user's own deposit-address key) — withdraw() below is just one caller.
+export function kmsAccountFromKey(keyArn: string, address: `0x${string}`) {
   return toAccount({
     address,
     async signTransaction(transaction, opts) {
@@ -138,12 +149,6 @@ function kmsAccountFromKey(keyArn: string, address: `0x${string}`) {
     },
   });
 }
-
-// Recovered from this repo's history (the earlier, since-reverted
-// self-custody signer) — confirmed on-chain via symbol()/decimals() at the
-// time, not re-derived here.
-const CELO_USDC_ADDRESS = "0xcebA9300f2b948710d2653dD7B07f33A8B32118C" as const;
-const USDC_DECIMALS = 6;
 
 const ERC20_TRANSFER_ABI = [
   {
@@ -196,23 +201,24 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     };
   },
 
-  // Phase 2: real signing + broadcasting, Celo/USDC only for now (matches
-  // current production behavior — broader multi-chain support is later
-  // work once this one chain is proven, not designed for speculatively
-  // here). Pays out from a single designated KMS key (AWS_KMS_PAYOUT_KEY_ARN)
-  // rather than per-user signing — mirrors Blockradar's own master-wallet
-  // model today (one wallet, pooled by auto-sweep, pays every send out),
-  // avoiding nonce-management complexity across many keys.
+  // Phase 2/6: real signing + broadcasting, USDC only, on any chain listed
+  // in chains.ts (getChainConfig throws clearly for anything else). Pays
+  // out from a single designated KMS key (AWS_KMS_PAYOUT_KEY_ARN) rather
+  // than per-user signing — mirrors Blockradar's own master-wallet model
+  // today (one wallet, pooled by auto-sweep, pays every send out),
+  // avoiding nonce-management complexity across many keys. Note: this
+  // makes withdraw() mechanically capable of paying out on any supported
+  // chain, but nothing here decides *which* chain to use when the payout
+  // key's USDC balance is fragmented across several — that's the caller's
+  // call (currently always wallet.chain — see the Phase 6 plan).
   async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
-    if (input.chain.toLowerCase() !== "celo") {
-      throw new Error(`aws-kms withdraw only supports Celo right now (got chain=${input.chain})`);
-    }
     if (input.tokenSymbol.toUpperCase() !== "USDC") {
       throw new Error(`aws-kms withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
     }
     if (!env.awsKmsPayoutKeyArn) {
       throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set when WALLET_PROVIDER=aws-kms");
     }
+    const { viemChain, rpcUrl, usdcAddress, usdcDecimals } = getChainConfig(input.chain);
 
     const client = kmsClient();
     const payoutAddress = await fetchAddressForKey(client, env.awsKmsPayoutKeyArn);
@@ -220,14 +226,14 @@ export const awsKmsWalletAdapter: WalletAdapter = {
 
     const walletClient = createWalletClient({
       account,
-      chain: celo,
-      transport: http(env.celoRpcUrl),
+      chain: viemChain,
+      transport: http(rpcUrl),
     });
 
     const data = encodeFunctionData({
       abi: ERC20_TRANSFER_ABI,
       functionName: "transfer",
-      args: [input.toAddress as `0x${string}`, parseUnits(input.amount, USDC_DECIMALS)],
+      args: [input.toAddress as `0x${string}`, parseUnits(input.amount, usdcDecimals)],
     });
 
     // Broadcast and return immediately — do NOT block on a receipt here.
@@ -238,7 +244,7 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     // failure while the transaction actually lands). Revert/confirmation
     // checking is deliberately deferred — see the Phase 2 plan.
     const txHash = await walletClient.sendTransaction({
-      to: CELO_USDC_ADDRESS,
+      to: usdcAddress,
       data,
       value: 0n,
     });
