@@ -28,10 +28,33 @@ export function buildChainsMessage(wallet: Wallet): string {
   return `Your deposit address runs on ${chainName} — send USDC there and it'll be picked up automatically. That's the only network supported right now.`;
 }
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Balance is tracked per (token, chain) — grouped back down to one line per
+// token here, same as before per-chain balances existed, unless a token
+// actually has funds on more than one chain (breaks out per-chain only
+// then, since USDC on one chain isn't spendable on another).
 export function buildBalanceMessage(balances: LedgerBalance[]): string {
-  const balanceLines = balances.length
-    ? balances.map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join("\n")
-    : "No balance yet — send USDC to your deposit address to get started.";
+  if (balances.length === 0) {
+    return `💰 Balance:\nNo balance yet — send USDC to your deposit address to get started.`;
+  }
+
+  const byToken = new Map<string, LedgerBalance[]>();
+  for (const b of balances) {
+    const rows = byToken.get(b.tokenSymbol) ?? [];
+    rows.push(b);
+    byToken.set(b.tokenSymbol, rows);
+  }
+
+  const balanceLines = [...byToken.entries()]
+    .flatMap(([token, rows]) =>
+      rows.length === 1
+        ? [`• ${formatAmount(rows[0]!.availableBalance)} ${token}`]
+        : [`• ${token}:`, ...rows.map((r) => `   - ${formatAmount(r.availableBalance)} on ${capitalize(r.chain)}`)],
+    )
+    .join("\n");
 
   return `💰 Balance:\n${balanceLines}`;
 }

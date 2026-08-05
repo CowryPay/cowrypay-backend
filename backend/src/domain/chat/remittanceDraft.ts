@@ -12,6 +12,7 @@ import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Insti
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
+import { ledgerRepo } from "../ledger/repository.js";
 import type { SendRecipient } from "../../types.js";
 import type { ParsedIntent } from "./schemas.js";
 import { resolveInstitutionWithLlm } from "./llm.js";
@@ -28,6 +29,7 @@ export interface RemittanceDraft {
   orderId: string;
   receiveAddress: string;
   validUntil: string;
+  chain: string;
 }
 
 export type RemittanceResolution =
@@ -48,6 +50,7 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
     countryHint: incoming.countryHint ?? existing.countryHint,
     institutionHint: incoming.institutionHint ?? existing.institutionHint,
     accountIdentifier: incoming.accountIdentifier ?? existing.accountIdentifier,
+    chainHint: incoming.chainHint ?? existing.chainHint,
   };
 }
 
@@ -91,6 +94,7 @@ async function finalizeRemittanceDraft(
   fiatCurrency: string,
   fiatCountryLabel: string,
   recipient: SendRecipient,
+  chainHint?: string,
 ): Promise<RemittanceResolution> {
   let treasuryAddress: string;
   try {
@@ -102,6 +106,32 @@ async function finalizeRemittanceDraft(
   const wallet = await walletsRepo.findByUserId(userId);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
 
+  // Balance is tracked per chain (USDC on one chain isn't spendable on
+  // another) — resolve which chain this send draws from before locking a
+  // rate. No balance anywhere yet still falls through to wallet.chain as a
+  // reasonable default; the real "not enough funds" error surfaces later,
+  // atomically, at actual debit time (domain/offramp/service.ts) — this is
+  // only about which chain, not whether there's enough there.
+  const balances = await ledgerRepo.getBalancesForUser(userId);
+  const fundedChains = balances.filter((b) => b.tokenSymbol === env.defaultTokenSymbol && Number(b.availableBalance) > 0);
+
+  let chain: string;
+  if (chainHint) {
+    const match = fundedChains.find((b) => b.chain.toLowerCase() === chainHint.toLowerCase());
+    if (!match) {
+      return {
+        ok: false,
+        message: `You don't have a ${env.defaultTokenSymbol} balance on ${chainHint} to send from.`,
+      };
+    }
+    chain = match.chain;
+  } else if (fundedChains.length > 1) {
+    const list = fundedChains.map((b) => `${b.chain} (${b.availableBalance} ${env.defaultTokenSymbol})`).join(", ");
+    return { ok: false, message: `Which chain would you like to send from? You have balance on: ${list}.` };
+  } else {
+    chain = fundedChains[0]?.chain ?? wallet.chain;
+  }
+
   const amountStr = String(amount);
   const { feeAmount, netAmount } = computeFeeSplit(amountStr);
   const reference = randomUUID();
@@ -111,7 +141,7 @@ async function finalizeRemittanceDraft(
     order = await createOfframpOrder({
       amount: netAmount,
       token: env.defaultTokenSymbol,
-      network: wallet.chain,
+      network: chain,
       refundAddress: wallet.address,
       fiatCurrency,
       recipient,
@@ -143,6 +173,7 @@ async function finalizeRemittanceDraft(
       orderId: order.orderId,
       receiveAddress: order.receiveAddress,
       validUntil: order.validUntil,
+      chain,
     },
     summary: `Ready to send $${amountStr} to ${recipient.accountName}${fiatCountryLabel}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
   };
@@ -187,6 +218,7 @@ export async function resolveRemittanceIntent(
         saved.fiatCurrency,
         ` (${saved.institutionName})`,
         recipient,
+        intent.chainHint,
       );
     }
   }
@@ -273,5 +305,6 @@ export async function resolveRemittanceIntent(
     country.currencyCode,
     ` (${matched.name}) in ${country.name}`,
     recipient,
+    intent.chainHint,
   );
 }

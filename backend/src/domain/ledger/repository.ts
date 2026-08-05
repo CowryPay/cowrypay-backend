@@ -7,6 +7,7 @@ function mapBalance(row: any): LedgerBalance {
     id: row.id,
     userId: row.user_id,
     tokenSymbol: row.token_symbol,
+    chain: row.chain,
     availableBalance: row.available_balance,
     pendingBalance: row.pending_balance,
     updatedAt: row.updated_at,
@@ -20,21 +21,24 @@ export const ledgerRepo = {
   },
 
   // Atomic upsert-increment — the addition happens in SQL, never in JS, so
-  // floating-point arithmetic never touches money.
+  // floating-point arithmetic never touches money. Keyed on (user, token,
+  // chain) since USDC on one chain isn't spendable on another — see the
+  // Phase 7 migration plan.
   async creditAvailable(
     client: PoolClient,
     userId: string,
     tokenSymbol: string,
+    chain: string,
     amount: string,
   ): Promise<LedgerBalance> {
     const { rows } = await client.query(
-      `insert into ledger_balances (user_id, token_symbol, available_balance)
-       values ($1, $2, $3)
-       on conflict (user_id, token_symbol)
+      `insert into ledger_balances (user_id, token_symbol, chain, available_balance)
+       values ($1, $2, $3, $4)
+       on conflict (user_id, token_symbol, chain)
        do update set available_balance = ledger_balances.available_balance + excluded.available_balance,
                      updated_at = now()
        returning *`,
-      [userId, tokenSymbol, amount],
+      [userId, tokenSymbol, chain, amount],
     );
     return mapBalance(rows[0]);
   },
@@ -48,14 +52,15 @@ export const ledgerRepo = {
     client: PoolClient,
     userId: string,
     tokenSymbol: string,
+    chain: string,
     amount: string,
   ): Promise<LedgerBalance | null> {
     const { rows } = await client.query(
       `update ledger_balances
-       set available_balance = available_balance - $3, updated_at = now()
-       where user_id = $1 and token_symbol = $2 and available_balance >= $3
+       set available_balance = available_balance - $4, updated_at = now()
+       where user_id = $1 and token_symbol = $2 and chain = $3 and available_balance >= $4
        returning *`,
-      [userId, tokenSymbol, amount],
+      [userId, tokenSymbol, chain, amount],
     );
     return rows[0] ? mapBalance(rows[0]) : null;
   },

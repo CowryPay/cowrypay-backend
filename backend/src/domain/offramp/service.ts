@@ -29,6 +29,12 @@ export interface InitiateSendInput {
   pin: string;
   rate?: string;
   existingOrder?: LockedOrder;
+  // Which chain to pay this send out from — defaults to wallet.chain when
+  // omitted, so any caller that doesn't pass it (old frontend, direct API
+  // use) behaves exactly as before per-chain balances existed. Only
+  // meaningful once a wallet can hold balance on more than one chain (see
+  // the Phase 7 migration plan) — until then this is always "celo".
+  chain?: string;
 }
 
 export interface InitiatedSend {
@@ -69,6 +75,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
   const wallet = await walletsRepo.findByUserId(userId);
   if (!wallet) throw new Error("No wallet found for user");
+  const chain = input.chain ?? wallet.chain;
 
   // Reuse the chat-locked order only if it hasn't expired by the time the
   // user actually confirms — Paycrest quotes are only valid for ~1hr.
@@ -90,7 +97,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     // concurrent sends can't both pass a balance check and double-spend the
     // same funds; whichever commits first wins, the other sees the reduced
     // balance and fails here.
-    const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, input.amount);
+    const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
     if (!debited) {
       throw new Error("Insufficient balance");
     }
@@ -99,7 +106,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       userId,
       walletId: wallet.id,
       tokenSymbol: env.defaultTokenSymbol,
-      chain: wallet.chain,
+      chain,
       amountHuman: input.amount,
       fiatCurrency: input.fiatCurrency,
       recipient: input.recipient,
@@ -116,7 +123,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     (await createOfframpOrder({
       amount: netAmount,
       token: env.defaultTokenSymbol,
-      network: wallet.chain,
+      network: chain,
       refundAddress: wallet.address,
       fiatCurrency: input.fiatCurrency,
       recipient: input.recipient,
@@ -142,7 +149,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   let payout;
   try {
     payout = await getWalletAdapter().withdraw({
-      chain: wallet.chain,
+      chain,
       tokenSymbol: env.defaultTokenSymbol,
       toAddress: order.receiveAddress,
       amount: netAmount,
@@ -153,7 +160,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       // Refund — the balance was debited up front to prevent double-spending
       // across concurrent sends, but the payout never actually left custody,
       // so the user's balance shouldn't reflect otherwise.
-      await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, input.amount);
+      await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
       await sendsRepo.updateState(client, updated.id, { state: "FAILED" });
       await sendsRepo.logTransition(
         client,
@@ -192,7 +199,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   if (Number(feeAmount) > 0) {
     try {
       const feeSweep = await getWalletAdapter().withdraw({
-        chain: wallet.chain,
+        chain,
         tokenSymbol: env.defaultTokenSymbol,
         toAddress: treasuryAddress,
         amount: feeAmount,

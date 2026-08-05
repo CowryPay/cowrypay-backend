@@ -13,6 +13,10 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     countryHint: z.string().optional(),
     institutionHint: z.string().optional(),
     accountIdentifier: z.string().optional(),
+    // Which chain to send from, if the user named one (e.g. "via Base") —
+    // only meaningful once a wallet can hold balance on more than one
+    // chain; see remittanceDraft.ts's resolution logic.
+    chainHint: z.string().optional(),
   }),
   z.object({
     kind: z.literal("admin"),

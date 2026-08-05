@@ -28,6 +28,7 @@ export interface LedgerBalance {
   id: string;
   userId: string;
   tokenSymbol: string;
+  chain: string;
   availableBalance: string;
   pendingBalance: string;
   updatedAt: string;

@@ -66,7 +66,7 @@ async function runScreening(depositId: string): Promise<Deposit> {
       "BALANCE_CREDITED",
       "screening_clear",
     );
-    await ledgerRepo.creditAvailable(client, deposit.userId, deposit.tokenSymbol, deposit.amount);
+    await ledgerRepo.creditAvailable(client, deposit.userId, deposit.tokenSymbol, deposit.chain, deposit.amount);
     return deposit;
   });
 }
@@ -93,7 +93,7 @@ export async function resolveManualReview(
         "manual_review_approved",
         actor,
       );
-      await ledgerRepo.creditAvailable(client, deposit.userId, deposit.tokenSymbol, deposit.amount);
+      await ledgerRepo.creditAvailable(client, deposit.userId, deposit.tokenSymbol, deposit.chain, deposit.amount);
       return deposit;
     }
 

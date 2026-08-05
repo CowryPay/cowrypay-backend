@@ -46,7 +46,7 @@ export async function checkPendingWithdrawals(): Promise<void> {
       // the earlier Blockradar double-spend bug), so refunding and marking
       // FAILED automatically here is safe.
       await withTransaction(async (client) => {
-        await ledgerRepo.creditAvailable(client, send.userId, send.tokenSymbol, send.amountHuman);
+        await ledgerRepo.creditAvailable(client, send.userId, send.tokenSymbol, send.chain, send.amountHuman);
         await sendsRepo.updateState(client, send.id, { state: "FAILED" });
         await sendsRepo.logTransition(client, send.id, send.state, "FAILED", `kms_withdraw_reverted:${send.withdrawTxHash}`);
       });

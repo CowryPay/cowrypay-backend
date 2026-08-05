@@ -93,6 +93,10 @@ const CreateSendSchema = z.object({
   pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
   rate: z.string().optional(),
   existingOrder: ExistingOrderSchema.optional(),
+  // Which chain to send from — optional, defaults to the wallet's chain
+  // (see domain/offramp/service.ts). Only meaningful once a wallet can
+  // hold balance on more than one chain (Phase 7 migration plan).
+  chain: z.string().optional(),
 });
 
 offrampRouter.post("/offramp/sends", requireAuth, async (req: Request, res: Response) => {
