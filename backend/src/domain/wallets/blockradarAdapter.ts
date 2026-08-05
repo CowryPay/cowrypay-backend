@@ -1,5 +1,5 @@
 import { env } from "../../config/env.js";
-import type { CreatedWallet, WalletAdapter, WithdrawResult } from "./adapter.js";
+import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 
 interface GenerateAddressResponse {
   data: {
@@ -91,58 +91,52 @@ export const blockradarWalletAdapter: WalletAdapter = {
       chain: json.data.blockchain.slug,
     };
   },
+
+  // docs.blockradar.co — POST /wallets/{walletId}/withdraw (no address
+  // sub-path) pays out directly from the master wallet, which is where every
+  // deposit ends up anyway: this wallet has auto-sweep enabled
+  // (confirmed live via a real webhook payload — isAutoSweep: true), so
+  // Blockradar itself consolidates every user's deposit here immediately,
+  // without any code on our side. Paying sends out from here instead of a
+  // separately-held wallet means one fewer private key in existence, and
+  // reuses the exact same trust model (their API key) as every other
+  // Blockradar call in this codebase.
+  async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
+    const { apiKey, walletId } = requireBlockradarConfig();
+    const assetId = await resolveAssetId(apiKey, walletId, input.chain, input.tokenSymbol);
+
+    const res = await fetch(`${env.blockradarBaseUrl}/wallets/${walletId}/withdraw`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": apiKey },
+      body: JSON.stringify({
+        assetId,
+        address: input.toAddress,
+        amount: input.amount,
+        reference: input.reference,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Blockradar master wallet withdraw failed (${res.status}): ${body}`);
+    }
+
+    const json = (await res.json()) as WithdrawResponse;
+    if (json.data.errors && json.data.errors.length > 0) {
+      throw new Error(`Blockradar master wallet withdraw rejected: ${JSON.stringify(json.data.errors)}`);
+    }
+
+    // A 200 with no errors and no hash is a legitimate outcome, not a
+    // failure — confirmed live: a master-wallet withdraw can go through
+    // AML/compliance screening before broadcasting, and the API returns
+    // immediately without a hash while that's pending. The real hash arrives
+    // later via the withdraw.success webhook (routes/blockradarWebhook.ts),
+    // matched back to this send by `reference`, not by hash (we don't have
+    // one yet). Do not treat this as an error — a caller that does will mark
+    // a send FAILED and refund it while Blockradar goes on to actually pay
+    // the recipient, a real double-spend confirmed to have happened live.
+    const hash = json.data.hash ?? json.data.success?.[0]?.id ?? null;
+    const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
+    return { txHash: hash, status };
+  },
 };
-
-// docs.blockradar.co — POST /wallets/{walletId}/withdraw (no address
-// sub-path) pays out directly from the master wallet, which is where every
-// deposit ends up anyway: this wallet has auto-sweep enabled
-// (confirmed live via a real webhook payload — isAutoSweep: true), so
-// Blockradar itself consolidates every user's deposit here immediately,
-// without any code on our side. Paying sends out from here instead of a
-// separately-held wallet means one fewer private key in existence, and
-// reuses the exact same trust model (their API key) as every other
-// Blockradar call in this codebase.
-export async function withdrawFromMasterWallet(input: {
-  chain: string;
-  tokenSymbol: string;
-  toAddress: string;
-  amount: string;
-  reference: string;
-}): Promise<WithdrawResult> {
-  const { apiKey, walletId } = requireBlockradarConfig();
-  const assetId = await resolveAssetId(apiKey, walletId, input.chain, input.tokenSymbol);
-
-  const res = await fetch(`${env.blockradarBaseUrl}/wallets/${walletId}/withdraw`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": apiKey },
-    body: JSON.stringify({
-      assetId,
-      address: input.toAddress,
-      amount: input.amount,
-      reference: input.reference,
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Blockradar master wallet withdraw failed (${res.status}): ${body}`);
-  }
-
-  const json = (await res.json()) as WithdrawResponse;
-  if (json.data.errors && json.data.errors.length > 0) {
-    throw new Error(`Blockradar master wallet withdraw rejected: ${JSON.stringify(json.data.errors)}`);
-  }
-
-  // A 200 with no errors and no hash is a legitimate outcome, not a
-  // failure — confirmed live: a master-wallet withdraw can go through
-  // AML/compliance screening before broadcasting, and the API returns
-  // immediately without a hash while that's pending. The real hash arrives
-  // later via the withdraw.success webhook (routes/blockradarWebhook.ts),
-  // matched back to this send by `reference`, not by hash (we don't have
-  // one yet). Do not treat this as an error — a caller that does will mark
-  // a send FAILED and refund it while Blockradar goes on to actually pay
-  // the recipient, a real double-spend confirmed to have happened live.
-  const hash = json.data.hash ?? json.data.success?.[0]?.id ?? null;
-  const status = json.data.status ?? json.data.success?.[0]?.status ?? "PENDING";
-  return { txHash: hash, status };
-}

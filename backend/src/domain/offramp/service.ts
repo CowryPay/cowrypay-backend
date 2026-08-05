@@ -4,7 +4,7 @@ import { env } from "../../config/env.js";
 import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { withdrawFromMasterWallet } from "../wallets/blockradarAdapter.js";
+import { getWalletAdapter } from "../wallets/index.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
@@ -141,7 +141,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
   let payout;
   try {
-    payout = await withdrawFromMasterWallet({
+    payout = await getWalletAdapter().withdraw({
       chain: wallet.chain,
       tokenSymbol: env.defaultTokenSymbol,
       toAddress: order.receiveAddress,
@@ -191,7 +191,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await withdrawFromMasterWallet({
+      const feeSweep = await getWalletAdapter().withdraw({
         chain: wallet.chain,
         tokenSymbol: env.defaultTokenSymbol,
         toAddress: treasuryAddress,
