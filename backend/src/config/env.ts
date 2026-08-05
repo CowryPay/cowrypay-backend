@@ -58,4 +58,9 @@ export const env = {
   // (x-admin-key) rather than real per-admin auth. Only required when that
   // endpoint is actually called — checked lazily, not here.
   adminApiKey: process.env.ADMIN_API_KEY,
+  // Only required when walletProvider === "aws-kms" — checked lazily by
+  // that adapter, not here, same pattern as the Blockradar vars above.
+  awsRegion: process.env.AWS_REGION,
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
 };
