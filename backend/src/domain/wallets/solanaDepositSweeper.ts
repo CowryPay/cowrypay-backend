@@ -12,12 +12,23 @@ import { signAndSendTransaction, USDC_DECIMALS } from "./solanaAdapter.js";
 // economics ties the two together).
 const MIN_SWEEP_BASE_UNITS = 10_000n; // 0.01 USDC
 
-// A simple 1-signer transaction's base fee is 5000 lamports; buffered up
-// for safety against compute-unit fee-market spikes rather than assumed
-// exact — mirrors chains.ts's gasBufferThreshold reasoning for the EVM
-// chains.
+// A simple 1-signer transaction's base fee is 5000 lamports — MIN_FEE_LAMPORTS
+// (the trigger threshold) is buffered up for safety against compute-unit
+// fee-market spikes, same as chains.ts's gasBufferThreshold reasoning for
+// the EVM chains. TOPUP_LAMPORTS (the amount actually sent) is a different
+// story: found live that a too-small top-up amount fails outright, not
+// just wastefully — a system account can't hold ANY non-zero balance below
+// Solana's real rent-exemption minimum (~890,880 lamports), so topping up
+// a zero-balance account with anything less gets rejected by the runtime
+// itself ("insufficient funds for rent"), not just under-funded. In normal
+// operation this path should rarely fire at all (createWallet already
+// funds every new wallet well above this), but the safety net has to
+// actually work on the rare occasions it's needed, including the
+// zero-balance case — so this is sized the same as
+// solanaAdapter.ts's own SYSTEM_ACCOUNT_RENT_LAMPORTS, not a smaller
+// fee-only guess.
 const MIN_FEE_LAMPORTS = 20_000n;
-const TOPUP_LAMPORTS = 50_000n;
+const TOPUP_LAMPORTS = 1_000_000n;
 
 export interface SweepableSolanaWallet {
   address: string;
