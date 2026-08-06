@@ -37,7 +37,14 @@ export function classifyIntent(message: string): ChatIntent {
 // same fate — nothing forced either to stay in sync with the other.
 export const DEPOSIT_CHAINS = ["celo", "base", "optimism", "stellar", "solana"] as const;
 
-const DEPOSIT_INTENT_RE = /\b(deposit|top ?up|fund my (wallet|account)|add (money|funds|usdc))\b/i;
+// "address" is included as its own trigger, not just "deposit"/"top up"/
+// etc — found live that "what's my solana address" has no "deposit" in it
+// at all, and the chain name sitting between "my" and "address" also broke
+// classifyIntent's separate, fixed-phrase "my address" match. "address" on
+// its own is a safe, unambiguous signal in this app's vocabulary — nothing
+// else in chat talks about "your address" (remittance flow asks for
+// account/bank/provider, never "address").
+const DEPOSIT_INTENT_RE = /\b(deposit|top ?up|fund my (wallet|account)|add (money|funds|usdc)|address)\b/i;
 const CHAIN_NAME_RE = new RegExp(`\\b(${DEPOSIT_CHAINS.join("|")})\\b`, "i");
 // A bare reply consisting of just a chain name — the natural follow-up once
 // the bot has asked "which chain?". Anchored to the whole message (not
