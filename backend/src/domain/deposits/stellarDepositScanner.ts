@@ -8,6 +8,23 @@ import { ingestDeposit } from "./stateMachine.js";
 
 const PAGE_SIZE = 50;
 
+// Accepts the proper MEMO_ID type as-is, but also a text-type memo that
+// parses cleanly as a non-negative integer — confirmed via a real live
+// test that some wallets/exchanges only expose a single generic "Memo"
+// field with no way to explicitly pick MEMO_ID, so a user typing the
+// exact right number can still end up with memo_type "text" through no
+// fault of their own. No new ambiguity from allowing this: memo_ids are
+// unique regardless of which on-chain memo type carried them.
+function resolveMemoId(tx: { memo_type: string; memo?: string }): bigint | null {
+  if ((tx.memo_type !== "id" && tx.memo_type !== "text") || tx.memo == null) return null;
+  if (!/^\d+$/.test(tx.memo)) return null;
+  try {
+    return BigInt(tx.memo);
+  } catch {
+    return null;
+  }
+}
+
 // No webhook exists for the shared Stellar account (nothing calls us), so
 // this polls Horizon's payments-for-account endpoint on a cursor, mirroring
 // depositScanner.ts's poll+cursor pattern for the EVM chains. The one real
@@ -65,7 +82,7 @@ export async function scanStellarDeposits(): Promise<void> {
       }
 
       const tx = await op.transaction(); // resolves from the embedded join above, no extra HTTP call
-      const memoId = tx.memo_type === "id" && tx.memo != null ? BigInt(tx.memo) : null;
+      const memoId = resolveMemoId(tx);
       const match = memoId != null ? await stellarMemoRepo.findByMemoId(memoId) : null;
 
       if (!match) {
