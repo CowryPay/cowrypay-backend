@@ -22,6 +22,7 @@ import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfir
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
+import { startSolanaDepositSweeper } from "./domain/wallets/solanaDepositSweeper.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -50,3 +51,4 @@ startWithdrawConfirmationPoller();
 startDepositScanner();
 startDepositSweeper();
 startStellarDepositScanner();
+startSolanaDepositSweeper();

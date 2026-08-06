@@ -23,7 +23,7 @@ import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 import { generateAndEncryptSolanaKeyPair, decryptSolanaSigner, getSolanaTreasurySigner } from "./solanaKms.js";
 
-const USDC_DECIMALS = 6;
+export const USDC_DECIMALS = 6;
 
 // A new system account needs ~890_880 lamports to be rent-exempt; its USDC
 // Associated Token Account needs ~2_039_280 more (Solana's own official
@@ -65,7 +65,11 @@ function rpcClients() {
 // single naive send — using a bare send here would risk exactly the "money
 // left the treasury, transaction never landed, no error surfaced" bug
 // class this is meant to avoid.
-async function signAndSendTransaction(
+// Exported for solanaDepositSweeper.ts's reuse — building/signing/sending a
+// Solana transaction with the blockhash-expiry-safe send helper is exactly
+// the same mechanics whether the fee payer is the treasury or a user's own
+// decrypted signer.
+export async function signAndSendTransaction(
   feePayer: Awaited<ReturnType<typeof getSolanaTreasurySigner>>,
   instructions: readonly unknown[],
 ): Promise<string> {
