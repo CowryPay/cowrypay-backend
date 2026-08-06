@@ -19,6 +19,7 @@ import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
+import { formatAmount } from "../../utils/format.js";
 import type { SendRecipient } from "../../types.js";
 import type { ParsedIntent } from "./schemas.js";
 import { resolveInstitutionWithLlm } from "./llm.js";
@@ -138,7 +139,7 @@ async function finalizeRemittanceDraft(
     }
     chain = match.chain;
   } else if (fundedChains.length > 1) {
-    const list = fundedChains.map((b) => `${b.chain} (${b.availableBalance} ${env.defaultTokenSymbol})`).join(", ");
+    const list = fundedChains.map((b) => `${b.chain} (${formatAmount(b.availableBalance)} ${env.defaultTokenSymbol})`).join(", ");
     return { ok: false, message: `Which chain would you like to send from? You have balance on: ${list}.` };
   } else {
     chain = fundedChains[0]?.chain ?? wallet.chain;
