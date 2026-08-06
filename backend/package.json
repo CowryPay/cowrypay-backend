@@ -16,6 +16,8 @@
     "@aws-sdk/client-kms": "^3.1103.0",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
+    "@solana-program/token": "^0.15.0",
+    "@solana/kit": "^7.0.0",
     "@stellar/stellar-sdk": "^16.2.0",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",

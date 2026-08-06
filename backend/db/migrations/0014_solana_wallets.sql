@@ -1,0 +1,21 @@
+-- Solana uses per-user unique deposit addresses (Solana's own official
+-- exchange-integration guide recommends this — the opposite of Stellar's
+-- shared-address-plus-memo model). This is architecturally much closer to
+-- the existing EVM chains, and it turns out no schema change is needed at
+-- all: migration 0013's partial unique index
+-- (wallets_address_unique_non_stellar, `where chain <> 'stellar'`) already
+-- covers `chain = 'solana'` with a real, non-lowered uniqueness guarantee —
+-- Solana rows just aren't 'stellar'.
+--
+-- No memo table (a Solana address IS the identity, nothing to disambiguate
+-- with a memo), no cursor table (deposit detection is webhook-driven via a
+-- third-party indexer, not polled — see stellarDepositCursor's own comment
+-- for why Stellar needed one and this doesn't), no unmatched-deposits table
+-- (Solana's one real failure mode — a token account that doesn't match the
+-- expected Associated Token Account derivation — is a simple reject-and-log
+-- case, not an ambiguous-which-user-is-this case like Stellar's missing
+-- memo).
+--
+-- This file exists to document that explicitly, not to carry real DDL, so
+-- a future reader isn't left wondering whether a migration was missed.
+select 1;

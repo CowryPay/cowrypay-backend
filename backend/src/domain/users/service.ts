@@ -73,3 +73,28 @@ export async function ensureStellarWallet(userId: string): Promise<Wallet> {
     return wallet;
   }
 }
+
+// Same shape as ensureStellarWallet, opt-in — but unlike Stellar,
+// "creating a wallet" here really does mean a brand-new on-chain address
+// (see solanaAdapter.ts), pre-funded from the treasury before it's handed
+// back, so this can be slower than the other ensure* calls (a real
+// on-chain transaction, not just a DB insert).
+export async function ensureSolanaWallet(userId: string): Promise<Wallet> {
+  const existing = await walletsRepo.findByUserIdAndChain(userId, "solana");
+  if (existing) return existing;
+
+  const user = await usersRepo.findById(userId);
+  if (!user) throw new Error(`User ${userId} not found`);
+
+  const adapter = getWalletAdapter("solana");
+  const createdWallet = await adapter.createWallet({ userId, email: user.email });
+
+  try {
+    return await withTransaction((client) => walletsRepo.create(client, userId, createdWallet, "solana"));
+  } catch (err) {
+    if ((err as { code?: string }).code !== "23505") throw err;
+    const wallet = await walletsRepo.findByUserIdAndChain(userId, "solana");
+    if (!wallet) throw err;
+    return wallet;
+  }
+}
