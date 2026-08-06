@@ -50,6 +50,18 @@ export function buildStellarAddressMessage(wallet: Wallet): string {
   ].join("\n");
 }
 
+// No memo needed here, unlike Stellar — every Solana deposit address is
+// already unique per user (see solanaAdapter.ts), matching Solana's own
+// exchange-integration convention.
+export function buildSolanaAddressMessage(wallet: Wallet): string {
+  return [
+    "Your CowryPay Solana deposit address:",
+    wallet.address,
+    "",
+    "Send USDC on the Solana network to that address — deposits are usually credited within moments of confirming on-chain.",
+  ].join("\n");
+}
+
 // Self-custody (aws-kms) addresses are valid on every chain in the
 // self-custody registry (one KMS key, same address everywhere) — Blockradar
 // wallets stay single-chain, so this only changes what self-custody users
@@ -100,7 +112,7 @@ export function buildHelpMessage(): string {
   return [
     "Here's what I can help with right now:",
     `• "What's my balance?" — check your available balance`,
-    `• "I want to deposit" — get your deposit address for a specific chain (Celo, Base, Optimism, or Stellar)`,
+    `• "I want to deposit" — get your deposit address for a specific chain (Celo, Base, Optimism, Stellar, or Solana)`,
     `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "My transactions" — see your recent activity`,

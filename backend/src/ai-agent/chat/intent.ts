@@ -28,13 +28,13 @@ export function classifyIntent(message: string): ChatIntent {
 }
 
 const DEPOSIT_INTENT_RE = /\b(deposit|top ?up|fund my (wallet|account)|add (money|funds|usdc))\b/i;
-const CHAIN_NAME_RE = /\b(celo|base|optimism|stellar)\b/i;
+const CHAIN_NAME_RE = /\b(celo|base|optimism|stellar|solana)\b/i;
 // A bare reply consisting of just a chain name — the natural follow-up once
 // the bot has asked "which chain?". Anchored to the whole message (not
 // \b-bounded like CHAIN_NAME_RE above) so an unrelated sentence that happens
 // to contain one of these words ("that's a stellar idea") never triggers
 // this, only a direct one-word-ish answer does.
-const BARE_CHAIN_RE = /^(celo|base|optimism|stellar)[.!]?$/i;
+const BARE_CHAIN_RE = /^(celo|base|optimism|stellar|solana)[.!]?$/i;
 
 // Same deterministic-only reasoning as classifyIntent — this resolves (and
 // for Stellar, lazily allocates) real wallet data, so it can't be an LLM

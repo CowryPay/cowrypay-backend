@@ -3,13 +3,14 @@ import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { ensureStellarWallet } from "../users/service.js";
+import { ensureStellarWallet, ensureSolanaWallet } from "../users/service.js";
 import { classifyIntent, matchDepositChainRequest } from "../../ai-agent/chat/intent.js";
 import {
   buildAddressMessage,
   buildBalanceMessage,
   buildChainsMessage,
   buildHelpMessage,
+  buildSolanaAddressMessage,
   buildStellarAddressMessage,
   buildTxHistoryMessage,
   buildWelcomeMessage,
@@ -73,12 +74,17 @@ export async function handleChatMessage(userId: string, message: string): Promis
     const chain = depositChainRequest.chain;
 
     if (!chain) {
-      return { reply: "Which chain would you like to deposit to? Celo, Base, Optimism, or Stellar." };
+      return { reply: "Which chain would you like to deposit to? Celo, Base, Optimism, Stellar, or Solana." };
     }
 
     if (chain === "stellar") {
       const wallet = await ensureStellarWallet(userId);
       return { reply: buildStellarAddressMessage(wallet) };
+    }
+
+    if (chain === "solana") {
+      const wallet = await ensureSolanaWallet(userId);
+      return { reply: buildSolanaAddressMessage(wallet) };
     }
 
     const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
