@@ -96,19 +96,13 @@ export function buildBalanceMessage(balances: LedgerBalance[]): string {
     return `💰 Balance:\nNo balance yet — send USDC to your deposit address to get started.`;
   }
 
-  const byToken = new Map<string, LedgerBalance[]>();
-  for (const b of balances) {
-    const rows = byToken.get(b.tokenSymbol) ?? [];
-    rows.push(b);
-    byToken.set(b.tokenSymbol, rows);
-  }
-
-  const balanceLines = [...byToken.entries()]
-    .flatMap(([token, rows]) =>
-      rows.length === 1
-        ? [`• ${formatAmount(rows[0]!.availableBalance)} ${token}`]
-        : [`• ${token}:`, ...rows.map((r) => `   - ${formatAmount(r.availableBalance)} on ${capitalize(r.chain)}`)],
-    )
+  // Always shows the chain, even when a token only has balance on one —
+  // pure transparency, not a disambiguation need (the send flow already
+  // auto-resolves or asks with real options when a chain choice is
+  // actually ambiguous). Helps build the right mental model of where funds
+  // actually sit now that deposits/sends span multiple chains by default.
+  const balanceLines = balances
+    .map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol} on ${capitalize(b.chain)}`)
     .join("\n");
 
   return `💰 Balance:\n${balanceLines}`;
