@@ -1,5 +1,6 @@
 import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 import { formatAmount } from "../../utils/format.js";
+import { SUPPORTED_CHAINS } from "../../domain/wallets/chains.js";
 
 export function buildWelcomeMessage(wallet: Wallet): string {
   return [
@@ -23,8 +24,18 @@ export function buildAddressMessage(wallet: Wallet): string {
   ].join("\n");
 }
 
+// Self-custody (aws-kms) addresses are valid on every chain in the
+// self-custody registry (one KMS key, same address everywhere) — Blockradar
+// wallets stay single-chain, so this only changes what self-custody users
+// see. Previously said "that's the only network supported right now"
+// unconditionally, which went stale (and actively wrong) the moment
+// multi-chain self-custody shipped.
 export function buildChainsMessage(wallet: Wallet): string {
-  const chainName = wallet.chain.charAt(0).toUpperCase() + wallet.chain.slice(1);
+  if (wallet.provider === "aws-kms") {
+    const names = SUPPORTED_CHAINS.map(capitalize).join(", ");
+    return `Your deposit address works the same way on every supported network: ${names}. Send USDC on any of them and it'll be picked up automatically.`;
+  }
+  const chainName = capitalize(wallet.chain);
   return `Your deposit address runs on ${chainName} — send USDC there and it'll be picked up automatically. That's the only network supported right now.`;
 }
 
