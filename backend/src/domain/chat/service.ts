@@ -65,10 +65,22 @@ export async function handleChatMessage(userId: string, message: string): Promis
   // Checked independent of `intent` — matchDepositChainRequest also fires on
   // a bare chain-name reply ("Stellar") mid-conversation, which
   // classifyIntent's single-message, no-context contract can't express.
+  //
+  // matchDepositChainRequest is tried FIRST, not intent === "address" —
+  // found live that a message like "what's my deposit address on stellar"
+  // matches classifyIntent's old ADDRESS_RE (via "deposit address") just as
+  // much as it matches DEPOSIT_INTENT_RE, but the old code short-circuited
+  // straight to { chain: null } the moment intent === "address" fired,
+  // never even checking whether the same message also named a chain. Since
+  // "stellar" was right there in the sentence, the bot re-asked a question
+  // the user had already answered. matchDepositChainRequest itself already
+  // returns { chain: null } (still a truthy object) for deposit-flavored
+  // messages naming no chain, so falling back to intent === "address" only
+  // matters for phrasing that trips the old regex but neither "deposit"
+  // language nor a bare chain name (e.g. "what's my wallet address").
   const depositChainRequest =
-    intent === "address"
-      ? { chain: null }
-      : matchDepositChainRequest(message, { allowBareChainName: !activeDraft });
+    matchDepositChainRequest(message, { allowBareChainName: !activeDraft }) ??
+    (intent === "address" ? { chain: null } : null);
   if (depositChainRequest) {
     await touchSession(userId);
     const chain = depositChainRequest.chain;
