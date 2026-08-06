@@ -148,9 +148,7 @@ offrampRouter.get("/offramp/sends/:id/receipt", requireAuth, async (req: Request
   const completedAt = transitions.find((t) => t.toState === "COMPLETE")?.createdAt ?? send.updatedAt;
 
   // Net amount (after platform fee) is only used internally here to compute
-  // what the recipient actually received — not exposed on the receipt
-  // itself, since showing netAmount without the fee that produced it would
-  // just read as an unexplained mismatch against amountSent.
+  // what the recipient actually received.
   const netAmount = Number(send.amountHuman) - Number(send.feeAmount ?? "0");
   const fiatAmountReceived =
     send.rate != null && Number.isFinite(Number(send.rate)) ? netAmount * Number(send.rate) : null;
@@ -161,7 +159,9 @@ offrampRouter.get("/offramp/sends/:id/receipt", requireAuth, async (req: Request
     receipt: {
       reference: send.reference,
       amountSent: formatAmount(send.amountHuman),
+      feeAmount: formatAmount(send.feeAmount ?? "0"),
       tokenSymbol: send.tokenSymbol,
+      chain: send.chain,
       fiatCurrency: send.fiatCurrency,
       fiatAmountReceived: fiatAmountReceived != null ? fiatAmountReceived.toFixed(2) : null,
       recipient: {

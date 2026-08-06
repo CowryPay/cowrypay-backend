@@ -41,6 +41,17 @@ export interface InitiatedSend {
   send: Send;
   receiveAddress: string;
   validUntil: string;
+  // Friendly confirmation text for the frontend to show right after
+  // submission. Deliberately says "processing", not "completed" — at this
+  // point the send has only broadcast, not settled (Paycrest's own
+  // payment_order.* webhook is what actually confirms that, later) —
+  // claiming otherwise here would repeat the exact kind of premature
+  // "done" claim that caused the double-spend bug earlier in this project.
+  message: string;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // SEND_INSTRUCTED -> ORDER_CREATED -> PAYOUT_INITIATED. Compliance screening
@@ -228,5 +239,16 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     }
   }
 
-  return { send: final, receiveAddress: order.receiveAddress, validUntil: order.validUntil };
+  const fiatAmount = Number(netAmount) * Number(order.rate);
+  const fiatEstimate = Number.isFinite(fiatAmount) ? fiatAmount.toLocaleString(undefined, { maximumFractionDigits: 2 }) : null;
+  const recipientLabel = input.recipient.institutionName ?? input.recipient.institution;
+  const message = [
+    `⏳ Your transaction with the following details is processing:`,
+    `💸 Sent ${input.amount} ${env.defaultTokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
+      (fiatEstimate ? ` will receive ${input.fiatCurrency} ${fiatEstimate}` : ""),
+    ``,
+    `This usually completes within a few minutes — we'll update you once it's confirmed.`,
+  ].join("\n");
+
+  return { send: final, receiveAddress: order.receiveAddress, validUntil: order.validUntil, message };
 }
