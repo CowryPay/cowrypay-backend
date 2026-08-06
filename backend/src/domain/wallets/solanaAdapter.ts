@@ -39,6 +39,17 @@ function requireSolanaUsdcMint(): string {
   return env.solanaUsdcMint;
 }
 
+// Pure string-based decimal-to-base-units conversion, deliberately not
+// Number(amount) * 10**decimals — this codebase avoids floating-point
+// arithmetic for money everywhere else (see utils/format.ts's own comment
+// on the same concern) and there's no reason for Solana amounts to be the
+// exception.
+function parseUsdcAmountToBaseUnits(amount: string): bigint {
+  const [whole, frac = ""] = amount.split(".");
+  const paddedFrac = (frac + "0".repeat(USDC_DECIMALS)).slice(0, USDC_DECIMALS);
+  return BigInt(whole || "0") * 10n ** BigInt(USDC_DECIMALS) + BigInt(paddedFrac || "0");
+}
+
 function rpcClients() {
   const rpc = createSolanaRpc(env.solanaRpcUrl);
   const wsUrl = env.solanaRpcUrl.replace(/^http/, "ws");
@@ -121,12 +132,62 @@ export const solanaWalletAdapter: WalletAdapter = {
     return { externalWalletId: ciphertext, address, chain: "solana" };
   },
 
-  // Phase 1 only ships wallet creation, inert otherwise — mirrors how the
-  // Stellar and aws-kms self-custody work shipped in phases. See the
-  // Solana integration plan for what's still missing (deposit detection,
-  // sweep) before withdraw can be safely implemented and tested.
-  async withdraw(_input: WithdrawInput): Promise<WithdrawResult> {
-    throw new Error("Solana withdraw is not implemented yet (Phase 1 of the Solana integration)");
+  // Mirrors awsKmsAdapter.withdraw's single-payout-key shape exactly (never
+  // per-user signing) — pays out from the treasury's own USDC ATA. Also
+  // idempotently creates the *destination's* ATA if it doesn't exist yet,
+  // paid for by the treasury, in the same transaction — unlike our own
+  // new user wallets (pre-funded at createWallet time), an arbitrary
+  // external withdraw destination is never guaranteed to already have USDC
+  // support set up, and this codebase has no control over that.
+  async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
+    if (input.tokenSymbol.toUpperCase() !== "USDC") {
+      throw new Error(`solana withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
+    }
+    const mint = requireSolanaUsdcMint();
+    const treasury = await getSolanaTreasurySigner();
+    const treasuryOwner = toAddress(treasury.address);
+    const destinationOwner = toAddress(input.toAddress);
+
+    const [treasuryAta] = await findAssociatedTokenPda({
+      owner: treasuryOwner,
+      mint: toAddress(mint),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    });
+    const [destinationAta] = await findAssociatedTokenPda({
+      owner: destinationOwner,
+      mint: toAddress(mint),
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+    });
+
+    const createDestinationAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
+      payer: treasury,
+      ata: destinationAta,
+      owner: destinationOwner,
+      mint: toAddress(mint),
+    });
+
+    // TransferChecked validates mint+decimals explicitly, unlike the plain
+    // Transfer instruction — worth the one extra field given a wrong-
+    // decimals bug elsewhere would otherwise be silently misinterpreted
+    // rather than rejected outright.
+    const transferIx = getTransferCheckedInstruction({
+      source: treasuryAta,
+      mint: toAddress(mint),
+      destination: destinationAta,
+      authority: treasury,
+      amount: parseUsdcAmountToBaseUnits(input.amount),
+      decimals: USDC_DECIMALS,
+    });
+
+    // Deliberate synchronous-confirm stance, same as the Stellar adapter —
+    // sendAndConfirmTransactionFactory only returns once the transaction
+    // has actually landed (or the blockhash expired and it never will).
+    // Do not "fix" this into the EVM adapter's broadcast-and-move-on
+    // pattern; the reasoning that made that safe there (avoiding the
+    // double-spend bug from treating pending-as-failure) doesn't carry
+    // over the same way here.
+    const signature = await signAndSendTransaction(treasury, [createDestinationAtaIx, transferIx]);
+    return { txHash: signature, status: "CONFIRMED" };
   },
 };
 
