@@ -4,6 +4,24 @@ export interface CreatedWallet {
   chain: string;
 }
 
+// Distinguished from a generic broadcast failure so callers can show a
+// clean, honest message instead of relaying a raw chain revert reason —
+// this fires when OUR payout wallet doesn't have enough on-chain USDC to
+// cover an otherwise-valid withdraw, not when the user's own balance is
+// insufficient. Those are different failures at different points: the
+// user's ledger balance is checked and atomically debited before any
+// blockchain call happens (ledgerRepo.debitAvailable in
+// domain/offramp/service.ts) — if this error fires at all, that check
+// already passed, so the payout wallet's real liquidity is the only thing
+// that can be short. Seen live in production: "ERC20: transfer amount
+// exceeds balance" from an aws-kms withdraw.
+export class PayoutLiquidityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PayoutLiquidityError";
+  }
+}
+
 export interface WithdrawResult {
   // Blockradar can accept a withdraw for AML/compliance screening and return
   // no hash yet (confirmed live: a 200 with no data.errors and no hash,

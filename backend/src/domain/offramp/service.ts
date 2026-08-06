@@ -5,6 +5,7 @@ import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { getWalletAdapter } from "../wallets/index.js";
+import { PayoutLiquidityError } from "../wallets/adapter.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
@@ -188,6 +189,13 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
         `blockradar_withdraw_failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
+    // PayoutLiquidityError's message is already clean and accurate (our
+    // payout wallet's liquidity, never the user's balance) — surfaced
+    // as-is rather than wrapped in the generic "could not broadcast (raw
+    // chain error)" text below, which is only fit for logs, not users.
+    if (err instanceof PayoutLiquidityError) {
+      throw err;
+    }
     throw new Error(
       `Could not broadcast the payout (${err instanceof Error ? err.message : String(err)}) — the send was marked failed.`,
     );

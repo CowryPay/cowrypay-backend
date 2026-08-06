@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { env } from "../../config/env.js";
 import { getChainConfig } from "./chains.js";
-import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
+import { PayoutLiquidityError, type CreatedWallet, type WalletAdapter, type WithdrawInput, type WithdrawResult } from "./adapter.js";
 
 function requireAwsConfig(): { region: string; accessKeyId: string; secretAccessKey: string } {
   if (!env.awsRegion || !env.awsAccessKeyId || !env.awsSecretAccessKey) {
@@ -243,11 +243,30 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     // same mistake in a new shape (a receipt-poll timeout looking like a
     // failure while the transaction actually lands). Revert/confirmation
     // checking is deliberately deferred — see the Phase 2 plan.
-    const txHash = await walletClient.sendTransaction({
-      to: usdcAddress,
-      data,
-      value: 0n,
-    });
+    let txHash: `0x${string}`;
+    try {
+      txHash = await walletClient.sendTransaction({
+        to: usdcAddress,
+        data,
+        value: 0n,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // The user's own ledger balance was already checked and atomically
+      // debited before this call (see PayoutLiquidityError's own doc
+      // comment) — a revert with this specific reason means the payout
+      // wallet itself is short on this chain's USDC, an operational
+      // liquidity problem on our side, not the user's.
+      if (message.includes("transfer amount exceeds balance")) {
+        console.error(
+          `[aws-kms withdraw] payout wallet ${payoutAddress} is short on USDC on ${input.chain} — needs topping up. Attempted amount: ${input.amount}`,
+        );
+        throw new PayoutLiquidityError(
+          "We're temporarily unable to complete this transfer due to a system issue on our end — your balance is unaffected. Please try again shortly, or contact support if it persists.",
+        );
+      }
+      throw err;
+    }
 
     return { txHash, status: "PENDING" };
   },
