@@ -94,4 +94,31 @@ export const env = {
   // not tied to WALLET_PROVIDER, since Stellar must run alongside whichever
   // EVM provider is active, not replace it.
   stellarDepositsEnabled: process.env.STELLAR_DEPOSITS_ENABLED === "true",
+  // Solana support (USDC only, per-user self-custody deposit addresses —
+  // unlike Stellar's shared address, this matches Solana's own official
+  // exchange-integration guidance). All only required once Solana code
+  // paths are actually exercised — checked lazily, same pattern as above.
+  solanaNetwork: process.env.SOLANA_NETWORK ?? "devnet",
+  // Public mainnet-beta RPC is rate-limited/unreliable for real use — a
+  // paid RPC (e.g. the chosen deposit-indexer's own) is expected in prod.
+  solanaRpcUrl: process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
+  // Circle's official USDC mint on Solana mainnet (developers.circle.com/
+  // stablecoins/usdc-contract-addresses) — devnet's differs, MUST override
+  // per environment.
+  solanaUsdcMint: process.env.SOLANA_USDC_MINT ?? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  // Symmetric KMS key wrapping every Solana seed at rest (per-user AND the
+  // treasury's) — may point at the same underlying key as
+  // STELLAR_KMS_KEY_ARN (one symmetric key can wrap either curve's seed
+  // bytes fine) or a distinct one.
+  solanaKmsKeyArn: process.env.SOLANA_KMS_KEY_ARN,
+  // The single treasury keypair's own KMS-wrapped seed — mirrors
+  // STELLAR_SIGNING_KEY_CIPHERTEXT's role exactly, just Solana's curve.
+  solanaTreasurySigningKeyCiphertext: process.env.SOLANA_TREASURY_SIGNING_KEY_CIPHERTEXT,
+  // Shared-secret the deposit-indexer webhook (Helius or equivalent) sends
+  // back on every call — verified in domain/deposits/solanaWebhook.ts.
+  solanaWebhookSecret: process.env.SOLANA_WEBHOOK_SECRET,
+  // Gates both the webhook route's actual processing and the sweeper's
+  // interval — deliberately one flag, not tied to WALLET_PROVIDER, same
+  // reasoning as STELLAR_DEPOSITS_ENABLED.
+  solanaDepositsEnabled: process.env.SOLANA_DEPOSITS_ENABLED === "true",
 };

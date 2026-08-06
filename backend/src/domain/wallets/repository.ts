@@ -60,4 +60,19 @@ export const walletsRepo = {
     const { rows } = await pool.query(`select * from wallets where provider = $1`, [provider]);
     return rows.map(mapWallet);
   },
+
+  // Exact match, deliberately not reusing findByAddress's case-insensitive
+  // lower() comparison — that's correct for EVM hex (no single canonical
+  // casing) but wrong for Solana's base58 addresses, where two different,
+  // both-valid pubkeys can lowercase to the same string. Used by the
+  // Solana deposit webhook instead of findByAddress.
+  async findByChainAndAddress(chain: string, address: string): Promise<Wallet | null> {
+    const { rows } = await pool.query(`select * from wallets where chain = $1 and address = $2`, [chain, address]);
+    return rows[0] ? mapWallet(rows[0]) : null;
+  },
+
+  async listByChain(chain: string): Promise<Wallet[]> {
+    const { rows } = await pool.query(`select * from wallets where chain = $1`, [chain]);
+    return rows.map(mapWallet);
+  },
 };
