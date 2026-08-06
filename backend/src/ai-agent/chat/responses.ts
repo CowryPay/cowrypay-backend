@@ -2,25 +2,51 @@ import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } fr
 import { formatAmount } from "../../utils/format.js";
 import { SUPPORTED_CHAINS } from "../../domain/wallets/chains.js";
 
-export function buildWelcomeMessage(wallet: Wallet): string {
+// Deliberately no address here — a user now holds a genuinely different
+// deposit flow per chain (one shared EVM address vs. a shared Stellar
+// address + a memo unique to them), so showing just one by default would
+// either be incomplete or misleading. Ask instead: "I want to deposit" (or
+// naming a chain directly) triggers matchDepositChainRequest in
+// chat/service.ts, which asks which chain if unspecified.
+export function buildWelcomeMessage(): string {
   return [
     "Welcome to CowryPay! 👋",
     "",
-    "Your deposit address is:",
-    `${wallet.address} (${wallet.chain})`,
-    "",
-    "Send USDC here anytime — I'll let you know the moment it lands, and you can check your balance whenever you like.",
+    `Say "I want to deposit" whenever you're ready to fund your account — I'll ask which chain and get you the right address.`,
     "",
     `Ask me things like "what's my balance" or say "help" to see what I can do.`,
   ].join("\n");
 }
 
-export function buildAddressMessage(wallet: Wallet): string {
+// `chain` is the specific chain the user asked about — distinct from
+// wallet.chain, which for an aws-kms wallet is always env.defaultChain
+// (e.g. "celo") even though the same address is valid on Base/Optimism too
+// (see chains.ts). Showing the asked-about chain here, not the row's stored
+// one, is what makes a "give me my Base address" reply actually say Base.
+export function buildAddressMessage(wallet: Wallet, chain?: string): string {
   return [
     "Your CowryPay deposit address:",
-    `${wallet.address} (${wallet.chain})`,
+    `${wallet.address} (${capitalize(chain ?? wallet.chain)})`,
     "",
     "Send USDC here — deposits are usually credited within moments of confirming on-chain.",
+  ].join("\n");
+}
+
+// Stellar's shared omnibus address means the memo is not optional trivia —
+// a deposit that lands without it (or with a memo that doesn't match this
+// user's) cannot be credited automatically and falls to manual review (see
+// stellarDepositScanner.ts / unmatched_stellar_deposits). Called out with a
+// warning emoji deliberately, not just folded into the same copy as
+// buildAddressMessage, given a real live test already showed how easy it
+// is to send the right number in the wrong memo field.
+export function buildStellarAddressMessage(wallet: Wallet): string {
+  return [
+    "Your CowryPay Stellar deposit address:",
+    wallet.address,
+    "",
+    `⚠️ You MUST include this memo with your deposit, or it can't be credited automatically: ${wallet.externalWalletId}`,
+    "",
+    "Send USDC on the Stellar network to that address with that memo — deposits are usually credited within moments of confirming on-chain.",
   ].join("\n");
 }
 
@@ -74,7 +100,7 @@ export function buildHelpMessage(): string {
   return [
     "Here's what I can help with right now:",
     `• "What's my balance?" — check your available balance`,
-    `• "What's my deposit address?" — get your wallet address again`,
+    `• "I want to deposit" — get your deposit address for a specific chain (Celo, Base, Optimism, or Stellar)`,
     `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "My transactions" — see your recent activity`,

@@ -3,12 +3,14 @@ import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { classifyIntent } from "../../ai-agent/chat/intent.js";
+import { ensureStellarWallet } from "../users/service.js";
+import { classifyIntent, matchDepositChainRequest } from "../../ai-agent/chat/intent.js";
 import {
   buildAddressMessage,
   buildBalanceMessage,
   buildChainsMessage,
   buildHelpMessage,
+  buildStellarAddressMessage,
   buildTxHistoryMessage,
   buildWelcomeMessage,
 } from "../../ai-agent/chat/responses.js";
@@ -16,10 +18,14 @@ import { createGroqClient, generateChatReply, parseWithLlm } from "./llm.js";
 import { mergeRemittanceDrafts, resolveRemittanceIntent, type RemittanceDraft, type RemittanceIntent } from "./remittanceDraft.js";
 import { clearSession, getActiveSession, saveSession, touchSession } from "./sessionRepository.js";
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export async function getWelcomeReply(userId: string): Promise<string> {
   const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) throw new Error("No wallet found for user");
-  return buildWelcomeMessage(wallet);
+  return buildWelcomeMessage();
 }
 
 export interface ChatResult {
@@ -46,15 +52,47 @@ function buildFollowUpPrompt(draft: RemittanceIntent, message: string): string {
 
 export async function handleChatMessage(userId: string, message: string): Promise<ChatResult> {
   const intent = classifyIntent(message);
+  // Fetched up front (not just where the LLM path used to fetch it) so the
+  // deposit-chain check below can tell a bare "celo" reply apart from a
+  // remittance draft's own "which chain to send from?" follow-up — see
+  // matchDepositChainRequest's allowBareChainName doc comment.
+  const activeDraft = await getActiveSession(userId);
 
   // Deterministic intents never touch a pending draft's content — they just
   // count as activity, so a quick "what's my balance?" mid-flow doesn't
   // cost the user their progress on an idle timer they didn't trigger.
-  if (intent === "address") {
+  // Checked independent of `intent` — matchDepositChainRequest also fires on
+  // a bare chain-name reply ("Stellar") mid-conversation, which
+  // classifyIntent's single-message, no-context contract can't express.
+  const depositChainRequest =
+    intent === "address"
+      ? { chain: null }
+      : matchDepositChainRequest(message, { allowBareChainName: !activeDraft });
+  if (depositChainRequest) {
     await touchSession(userId);
+    const chain = depositChainRequest.chain;
+
+    if (!chain) {
+      return { reply: "Which chain would you like to deposit to? Celo, Base, Optimism, or Stellar." };
+    }
+
+    if (chain === "stellar") {
+      const wallet = await ensureStellarWallet(userId);
+      return { reply: buildStellarAddressMessage(wallet) };
+    }
+
     const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
     if (!wallet) throw new Error("No wallet found for user");
-    return { reply: buildAddressMessage(wallet) };
+    // A Blockradar wallet is genuinely single-chain (unlike aws-kms, where
+    // one address is valid across Celo/Base/Optimism) — asking for a
+    // different chain than the one it's actually registered on would hand
+    // back an address that just wouldn't work for that chain.
+    if (wallet.provider !== "aws-kms" && chain !== wallet.chain) {
+      return {
+        reply: `Your deposit address only supports ${capitalize(wallet.chain)} right now — ${capitalize(chain)} isn't available yet.`,
+      };
+    }
+    return { reply: buildAddressMessage(wallet, chain) };
   }
 
   if (intent === "balance") {
@@ -89,9 +127,8 @@ export async function handleChatMessage(userId: string, message: string): Promis
     return { reply: await generateChatReply(message) };
   }
 
-  // Only expired-or-absent sessions come back null here — see
-  // sessionRepository.ts for the idle-timeout check itself.
-  const activeDraft = await getActiveSession(userId);
+  // activeDraft was already fetched up front — only expired-or-absent
+  // sessions come back null (see sessionRepository.ts's idle-timeout check).
   const llmInput = activeDraft ? buildFollowUpPrompt(activeDraft, message) : message;
   const parsed = await parseWithLlm(groq, llmInput).catch(() => null);
 
