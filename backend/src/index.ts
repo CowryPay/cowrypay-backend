@@ -15,9 +15,11 @@ import { pinRouter } from "./routes/pin.js";
 import { recipientsRouter } from "./routes/recipients.js";
 import { signupRouter } from "./routes/signup.js";
 import { usersRouter } from "./routes/users.js";
+import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
+import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -34,6 +36,7 @@ app.use(recipientsRouter);
 app.use(blockradarWebhookRouter);
 app.use(paycrestWebhookRouter);
 app.use(chatRouter);
+app.use(stellarWalletRouter);
 
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
@@ -42,3 +45,4 @@ app.listen(env.port, () => {
 startWithdrawConfirmationPoller();
 startDepositScanner();
 startDepositSweeper();
+startStellarDepositScanner();

@@ -46,3 +46,30 @@ export async function ensureAccount(authUser: {
     return { user, wallet, created: false };
   }
 }
+
+// Separate from ensureAccount deliberately — Stellar is opt-in, not part of
+// the default signup path (the highest-traffic path in the app), and
+// "creating a wallet" here just means allocating this user's memo against
+// the one shared deposit address (see stellarAdapter.ts), not a new
+// on-chain address. Requires the user to already exist (created via
+// ensureAccount) — this never creates a user account itself.
+export async function ensureStellarWallet(userId: string): Promise<Wallet> {
+  const existing = await walletsRepo.findByUserIdAndChain(userId, "stellar");
+  if (existing) return existing;
+
+  const user = await usersRepo.findById(userId);
+  if (!user) throw new Error(`User ${userId} not found`);
+
+  const adapter = getWalletAdapter("stellar");
+  const createdWallet = await adapter.createWallet({ userId, email: user.email });
+
+  try {
+    return await withTransaction((client) => walletsRepo.create(client, userId, createdWallet, "stellar"));
+  } catch (err) {
+    // Concurrent call already created it — same fallback shape as ensureAccount.
+    if ((err as { code?: string }).code !== "23505") throw err;
+    const wallet = await walletsRepo.findByUserIdAndChain(userId, "stellar");
+    if (!wallet) throw err;
+    return wallet;
+  }
+}
