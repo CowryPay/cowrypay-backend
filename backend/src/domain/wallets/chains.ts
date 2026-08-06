@@ -24,11 +24,20 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     rpcUrl: env.celoRpcUrl,
     usdcAddress: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
     usdcDecimals: 6,
-    // Comfortably covers a standard ERC-20 transfer's gas on Celo many
-    // times over — a fixed constant rather than a dynamic estimate, since
-    // estimating gas for a sender with zero balance is unreliable.
-    gasTopUpAmount: parseEther("0.01"),
-    gasBufferThreshold: parseEther("0.005"),
+    // Confirmed live that the previous values (0.01 / 0.005) were no longer
+    // sufficient: at a real, current Celo gas price of 202.5 gwei, one
+    // standard ERC-20 transfer costs ~0.0132 CELO — above both the old
+    // top-up amount AND the old buffer threshold, which produced a
+    // real, permanently-stuck failure mode: a wallet topped up to exactly
+    // 0.01 CELO sits *above* a 0.005 threshold (so no further top-up ever
+    // triggers) while still genuinely short of what a transfer costs,
+    // wedging that wallet's sweep forever until manually intervened.
+    // Raised with real margin over today's cost (not just "many times
+    // over" as an untested claim) — still a fixed constant, not a dynamic
+    // estimate, for the same zero-balance-sender reason as before, but
+    // sized against an actual observed price rather than an assumption.
+    gasTopUpAmount: parseEther("0.05"),
+    gasBufferThreshold: parseEther("0.02"),
   },
   base: {
     viemChain: base,
