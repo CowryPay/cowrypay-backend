@@ -16,8 +16,14 @@ function mapWallet(row: any): Wallet {
 }
 
 export const walletsRepo = {
-  async findByUserId(userId: string): Promise<Wallet | null> {
-    const { rows } = await pool.query(`select * from wallets where user_id = $1`, [userId]);
+  // Required `chain` param, deliberately not optional — since migration
+  // 0013, a user can have more than one wallet row (one per chain, e.g. an
+  // EVM wallet plus a Stellar one), so "the wallet for this user" is no
+  // longer well-defined without saying which chain. Making this required
+  // forces every call site to say which chain it means instead of silently
+  // getting back an arbitrary row.
+  async findByUserIdAndChain(userId: string, chain: string): Promise<Wallet | null> {
+    const { rows } = await pool.query(`select * from wallets where user_id = $1 and chain = $2`, [userId, chain]);
     return rows[0] ? mapWallet(rows[0]) : null;
   },
 
@@ -29,6 +35,12 @@ export const walletsRepo = {
   // stored — the webhook handler would then just log it as "no wallet
   // registered" and ack 200, so Blockradar never retries and the deposit
   // never gets credited, with nothing anywhere surfacing it as a failure.
+  //
+  // Only safe where `address` is genuinely unique to one user — never for
+  // chain='stellar', where every user's row shares the same shared deposit
+  // address and this would return an arbitrary one of them. Today's only
+  // callers (routes/blockradarWebhook.ts, routes/deposits.ts) are both
+  // Blockradar-only, so no live bug — this is a guard against future misuse.
   async findByAddress(address: string): Promise<Wallet | null> {
     const { rows } = await pool.query(`select * from wallets where lower(address) = lower($1)`, [address]);
     return rows[0] ? mapWallet(rows[0]) : null;

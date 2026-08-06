@@ -110,7 +110,7 @@ async function finalizeRemittanceDraft(
     return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
   }
 
-  const wallet = await walletsRepo.findByUserId(userId);
+  const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
 
   // Balance is tracked per chain (USDC on one chain isn't spendable on

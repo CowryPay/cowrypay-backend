@@ -70,4 +70,28 @@ export const env = {
   celoRpcUrl: process.env.CELO_RPC_URL ?? "https://forno.celo.org",
   baseRpcUrl: process.env.BASE_RPC_URL ?? "https://mainnet.base.org",
   optimismRpcUrl: process.env.OPTIMISM_RPC_URL ?? "https://mainnet.optimism.io",
+  // Stellar support (USDC only, shared omnibus deposit address + per-user
+  // memo — a different custody model from every EVM chain above). All only
+  // required once Stellar code paths are actually exercised — checked
+  // lazily by that code, not here, same pattern as the vars above.
+  stellarNetwork: process.env.STELLAR_NETWORK ?? "testnet",
+  stellarHorizonUrl: process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org",
+  stellarDepositAddress: process.env.STELLAR_DEPOSIT_ADDRESS,
+  // Circle's USDC-on-Stellar issuer — re-verify against
+  // developers.circle.com/stablecoins/quickstart-transfer-usdc-stellar
+  // before ever setting this in production; do not trust a hardcoded value.
+  stellarUsdcIssuer: process.env.STELLAR_USDC_ISSUER,
+  // KMS *symmetric* Encrypt/Decrypt key — protects the shared Stellar
+  // account's secret seed at rest. Deliberately not the same key/mechanism
+  // as awsKmsPayoutKeyArn above: that's an asymmetric Sign-only key (KMS
+  // never releases the private key), but AWS KMS cannot sign Ed25519
+  // (Stellar's curve) at all — so here KMS only wraps/unwraps the seed,
+  // which is decrypted into process memory at the moment of signing. See
+  // stellarKms.ts for the full custody-model tradeoff this implies.
+  stellarKmsKeyArn: process.env.STELLAR_KMS_KEY_ARN,
+  stellarSigningKeyCiphertext: process.env.STELLAR_SIGNING_KEY_CIPHERTEXT,
+  // Independent on/off switch for the Stellar deposit poller — deliberately
+  // not tied to WALLET_PROVIDER, since Stellar must run alongside whichever
+  // EVM provider is active, not replace it.
+  stellarDepositsEnabled: process.env.STELLAR_DEPOSITS_ENABLED === "true",
 };

@@ -16,14 +16,14 @@ export async function ensureAccount(authUser: {
 }): Promise<{ user: User; wallet: Wallet; created: boolean }> {
   const existingUser = await usersRepo.findById(authUser.id);
   if (existingUser) {
-    const wallet = await walletsRepo.findByUserId(existingUser.id);
+    const wallet = await walletsRepo.findByUserIdAndChain(existingUser.id, env.defaultChain);
     if (!wallet) {
       throw new Error(`User ${existingUser.id} has no wallet — data integrity issue`);
     }
     return { user: existingUser, wallet, created: false };
   }
 
-  const adapter = getWalletAdapter();
+  const adapter = getWalletAdapter(env.defaultChain);
   const createdWallet = await adapter.createWallet({ userId: authUser.id, email: authUser.email });
 
   try {
@@ -34,14 +34,14 @@ export async function ensureAccount(authUser: {
     });
   } catch (err) {
     // A concurrent call for the same identity already created the account
-    // (unique_violation on users.id or wallets.user_id) — fall back to
-    // reading what's there instead of surfacing a 500 and leaving the
-    // caller with no wallet, even though the wallet-infra call above still
-    // created a real address that's now orphaned on that side.
+    // (unique_violation on users.id or wallets' (user_id, chain) pair) —
+    // fall back to reading what's there instead of surfacing a 500 and
+    // leaving the caller with no wallet, even though the wallet-infra call
+    // above still created a real address that's now orphaned on that side.
     if ((err as { code?: string }).code !== "23505") throw err;
 
     const user = await usersRepo.findById(authUser.id);
-    const wallet = user ? await walletsRepo.findByUserId(user.id) : null;
+    const wallet = user ? await walletsRepo.findByUserIdAndChain(user.id, env.defaultChain) : null;
     if (!user || !wallet) throw err;
     return { user, wallet, created: false };
   }

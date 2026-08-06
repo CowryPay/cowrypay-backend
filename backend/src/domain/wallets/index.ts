@@ -3,8 +3,17 @@ import type { WalletAdapter } from "./adapter.js";
 import { blockradarWalletAdapter } from "./blockradarAdapter.js";
 import { mockWalletAdapter } from "./mockAdapter.js";
 import { awsKmsWalletAdapter } from "./awsKmsAdapter.js";
+import { stellarWalletAdapter } from "./stellarAdapter.js";
 
-export function getWalletAdapter(): WalletAdapter {
+// Chain-aware, not just a flat WALLET_PROVIDER switch: Stellar's shared-
+// address/memo model is a wholly separate custody path that must run
+// alongside whichever EVM provider is active (a user can hold USDC on both
+// Celo and Stellar at once), not replace it — so it's checked first,
+// independent of env.walletProvider entirely.
+export function getWalletAdapter(chain: string): WalletAdapter {
+  if (chain.toLowerCase() === "stellar") {
+    return stellarWalletAdapter;
+  }
   switch (env.walletProvider) {
     case "mock":
       return mockWalletAdapter;
