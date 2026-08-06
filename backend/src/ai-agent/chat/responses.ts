@@ -1,6 +1,5 @@
 import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 import { formatAmount } from "../../utils/format.js";
-import { SUPPORTED_CHAINS } from "../../domain/wallets/chains.js";
 
 // Deliberately no address here — a user now holds a genuinely different
 // deposit flow per chain (one shared EVM address vs. a shared Stellar
@@ -68,13 +67,20 @@ export function buildSolanaAddressMessage(wallet: Wallet): string {
 // see. Previously said "that's the only network supported right now"
 // unconditionally, which went stale (and actively wrong) the moment
 // multi-chain self-custody shipped.
+// Previously said "your deposit address works the same way on every
+// supported network" — true for the EVM chains sharing one aws-kms
+// address, but flatly wrong for Stellar/Solana, which each need their own
+// separate address (and every user gets a Stellar wallet automatically,
+// Solana in the background, regardless of which EVM provider they're on —
+// see ensureAccount in users/service.ts). Rewritten to describe the real
+// shape instead of just appending more names to the old "one address"
+// framing.
 export function buildChainsMessage(wallet: Wallet): string {
-  if (wallet.provider === "aws-kms") {
-    const names = SUPPORTED_CHAINS.map(capitalize).join(", ");
-    return `Your deposit address works the same way on every supported network: ${names}. Send USDC on any of them and it'll be picked up automatically.`;
-  }
-  const chainName = capitalize(wallet.chain);
-  return `Your deposit address runs on ${chainName} — send USDC there and it'll be picked up automatically. That's the only network supported right now.`;
+  const evmPart =
+    wallet.provider === "aws-kms"
+      ? "Celo, Base, and Optimism all share the same deposit address"
+      : `${capitalize(wallet.chain)} (your only EVM network right now)`;
+  return `You can deposit USDC on several networks: ${evmPart}. Stellar and Solana each need their own separate address — just say "I want to deposit via Stellar" or "...via Solana" to get it.`;
 }
 
 function capitalize(s: string): string {

@@ -27,14 +27,24 @@ export function classifyIntent(message: string): ChatIntent {
   return "unknown";
 }
 
+// Single source of truth for every chain a user can deposit to. Both the
+// regexes below AND buildChainsMessage (responses.ts) derive from this —
+// specifically so adding a new chain means updating this one list, not
+// hunting through every place a chain name happens to be hardcoded. Found
+// live, twice in one session, what happens without it: buildChainsMessage
+// went stale (still only listing the three EVM chains) the moment
+// Stellar/Solana shipped, and this file's own regexes almost suffered the
+// same fate — nothing forced either to stay in sync with the other.
+export const DEPOSIT_CHAINS = ["celo", "base", "optimism", "stellar", "solana"] as const;
+
 const DEPOSIT_INTENT_RE = /\b(deposit|top ?up|fund my (wallet|account)|add (money|funds|usdc))\b/i;
-const CHAIN_NAME_RE = /\b(celo|base|optimism|stellar|solana)\b/i;
+const CHAIN_NAME_RE = new RegExp(`\\b(${DEPOSIT_CHAINS.join("|")})\\b`, "i");
 // A bare reply consisting of just a chain name — the natural follow-up once
 // the bot has asked "which chain?". Anchored to the whole message (not
 // \b-bounded like CHAIN_NAME_RE above) so an unrelated sentence that happens
 // to contain one of these words ("that's a stellar idea") never triggers
 // this, only a direct one-word-ish answer does.
-const BARE_CHAIN_RE = /^(celo|base|optimism|stellar|solana)[.!]?$/i;
+const BARE_CHAIN_RE = new RegExp(`^(${DEPOSIT_CHAINS.join("|")})[.!]?$`, "i");
 
 // Same deterministic-only reasoning as classifyIntent — this resolves (and
 // for Stellar, lazily allocates) real wallet data, so it can't be an LLM
