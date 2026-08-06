@@ -8,7 +8,13 @@ import {
   type CountryInfo,
 } from "../../ai-agent/offramp/countries.js";
 import { describeInstitutionPrompt, findInstitutionMatches } from "../../ai-agent/offramp/institutionMatch.js";
-import { createOfframpOrder, getInstitutions, verifyRecipientAccount, type Institution } from "../offramp/paycrestAdapter.js";
+import {
+  createOfframpOrder,
+  getInstitutions,
+  verifyRecipientAccount,
+  NoLiquidityProviderError,
+  type Institution,
+} from "../offramp/paycrestAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -154,6 +160,9 @@ async function finalizeRemittanceDraft(
       reference,
     });
   } catch (err) {
+    if (err instanceof NoLiquidityProviderError) {
+      return { ok: false, message: err.message };
+    }
     return {
       ok: false,
       message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,

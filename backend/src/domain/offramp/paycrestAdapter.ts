@@ -1,5 +1,17 @@
 import { env } from "../../config/env.js";
 
+// Distinguished from a generic order-creation failure so callers can show a
+// clean, actionable message instead of relaying Paycrest's raw validation
+// text — this fires when no liquidity provider will fill an order (seen in
+// practice for very small amounts, e.g. sub-$1 USDC->NGN), not a bug in our
+// request.
+export class NoLiquidityProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NoLiquidityProviderError";
+  }
+}
+
 export interface RateQuote {
   rate: string;
 }
@@ -101,6 +113,17 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
 
   if (!res.ok) {
     const body = await res.text();
+    let parsed: { data?: { field?: string; message?: string } } | null = null;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      // not JSON — fall through to the generic error below
+    }
+    if (parsed?.data?.field === "Rate" && parsed.data.message?.toLowerCase().includes("no provider available")) {
+      throw new NoLiquidityProviderError(
+        "That amount is too small to convert right now — try sending a larger amount.",
+      );
+    }
     throw new Error(`Paycrest order creation failed (${res.status}): ${body}`);
   }
 
