@@ -102,7 +102,7 @@ export function buildBalanceMessage(balances: LedgerBalance[]): string {
   // actually ambiguous). Helps build the right mental model of where funds
   // actually sit now that deposits/sends span multiple chains by default.
   const balanceLines = balances
-    .map((b) => `• ${formatAmount(b.availableBalance)} ${b.tokenSymbol} on ${capitalize(b.chain)}`)
+    .map((b) => `${formatAmount(b.availableBalance)} ${b.tokenSymbol} on ${capitalize(b.chain)}`)
     .join("\n");
 
   return `💰 Balance:\n${balanceLines}`;
