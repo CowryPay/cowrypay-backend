@@ -18,13 +18,31 @@ export async function scanStellarDeposits(): Promise<void> {
   if (!env.stellarDepositAddress) return;
 
   const server = new Horizon.Server(env.stellarHorizonUrl);
-  const cursor = await stellarCursorRepo.getCursor();
+  let cursor = await stellarCursorRepo.getCursor();
+
+  if (cursor == null) {
+    // Bootstrap once, on the very first-ever poll. Horizon's "now" cursor
+    // keyword is NOT a stable, reusable token — it re-resolves to whatever
+    // moment a call happens to land on. Using it directly as the poll
+    // cursor (the original version of this code did) meant every empty
+    // poll cycle re-asked for a fresh "now" instead of persisting one,
+    // silently dropping anything that landed in the gap between two
+    // 30s-apart polls. A ledger-sequence-derived cursor (documented Horizon
+    // format: ledger sequence in the high 32 bits, 0 in the low bits) is a
+    // real, stable paging token — computed once here, then persisted
+    // immediately so every cycle after this one advances from a fixed
+    // point instead of a moving target.
+    const latestLedger = await server.ledgers().order("desc").limit(1).call();
+    const ledgerSeq = latestLedger.records[0]?.sequence ?? 0;
+    cursor = (BigInt(ledgerSeq) << 32n).toString();
+    await stellarCursorRepo.setCursor(cursor);
+  }
 
   const page = await server
     .payments()
     .forAccount(env.stellarDepositAddress)
     .join("transactions") // memo lives on the parent tx, not the operation — avoids an N+1 Horizon call per payment
-    .cursor(cursor ?? "now") // no historical backfill, same as depositScanner.ts — only deposits from now forward matter
+    .cursor(cursor)
     .order("asc")
     .limit(PAGE_SIZE)
     .call();
