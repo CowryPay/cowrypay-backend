@@ -10,7 +10,52 @@ import { usersRepo } from "./repository.js";
 // + wallet exist for that identity, creating them on first call and
 // returning the existing ones on every call after (idempotent, matches
 // §7.4's "reuse the existing wallet, never create a second one").
-export async function ensureAccount(authUser: {
+// Every user ends up with all three wallet types without any explicit
+// opt-in step, but the two ways that happens are deliberately asymmetric —
+// Stellar and Solana aren't actually the same cost to create:
+//
+// - EVM: already automatic (createAccountCore below), unchanged.
+// - Stellar: also made synchronous here. Allocating a memo is just a DB
+//   insert against the one shared deposit address (stellarAdapter.ts) —
+//   no on-chain transaction, no treasury spend — so there's no real reason
+//   to keep it lazy/opt-in the way it started out.
+// - Solana: kicked off in the background, NOT awaited. Unlike Stellar,
+//   creating a Solana wallet is a real on-chain transaction (pre-funding
+//   the new address's rent-exemption + creating its USDC ATA — see
+//   solanaAdapter.ts) with real on-chain confirmation latency and a real
+//   (if small) treasury cost. Blocking every signup on that would put
+//   Solana's confirmation time inside the signup request for every user,
+//   including the share who may never touch Solana at all.
+// - ensureStellarWallet/ensureSolanaWallet are both already idempotent, so
+//   GET /wallets/stellar, GET /wallets/solana, and the chat deposit-chain
+//   flow all still call them directly too — the on-demand path is the
+//   safety net for the rare case someone asks for their Solana address in
+//   the second or two before this background call finishes (or if it
+//   failed and needs a retry).
+// - Errors from either are logged, never thrown — a hiccup allocating a
+//   Stellar memo or creating a Solana wallet must not fail the signup
+//   itself, which only ever promises the EVM wallet every other part of
+//   the app actually depends on.
+// - Runs on every ensureAccount call, not just brand-new signups — this is
+//   also how a user who signed up before this existed gets backfilled;
+//   the idempotent check inside each ensure*Wallet call makes the repeat
+//   work for already-provisioned users cheap (one lookup, no-op).
+export async function ensureAccount(
+  authUser: { id: string; email: string | null },
+): Promise<{ user: User; wallet: Wallet; created: boolean }> {
+  const result = await ensureAccountCore(authUser);
+
+  await ensureStellarWallet(result.user.id).catch((err) => {
+    console.error(`[ensureAccount] failed to ensure Stellar wallet for ${result.user.id}:`, err);
+  });
+  ensureSolanaWallet(result.user.id).catch((err) => {
+    console.error(`[ensureAccount] background Solana wallet creation failed for ${result.user.id}:`, err);
+  });
+
+  return result;
+}
+
+async function ensureAccountCore(authUser: {
   id: string;
   email: string | null;
 }): Promise<{ user: User; wallet: Wallet; created: boolean }> {
@@ -47,12 +92,15 @@ export async function ensureAccount(authUser: {
   }
 }
 
-// Separate from ensureAccount deliberately — Stellar is opt-in, not part of
-// the default signup path (the highest-traffic path in the app), and
+// Called automatically (and awaited) from ensureAccount above, but kept as
+// its own exported function since GET /wallets/stellar and the chat
+// deposit-chain flow also call it directly — idempotent either way, and
 // "creating a wallet" here just means allocating this user's memo against
 // the one shared deposit address (see stellarAdapter.ts), not a new
-// on-chain address. Requires the user to already exist (created via
-// ensureAccount) — this never creates a user account itself.
+// on-chain address, which is exactly why it's cheap enough to run
+// synchronously on every signup. Requires the user to already exist
+// (created via ensureAccountCore) — this never creates a user account
+// itself.
 export async function ensureStellarWallet(userId: string): Promise<Wallet> {
   const existing = await walletsRepo.findByUserIdAndChain(userId, "stellar");
   if (existing) return existing;
@@ -74,11 +122,17 @@ export async function ensureStellarWallet(userId: string): Promise<Wallet> {
   }
 }
 
-// Same shape as ensureStellarWallet, opt-in — but unlike Stellar,
-// "creating a wallet" here really does mean a brand-new on-chain address
-// (see solanaAdapter.ts), pre-funded from the treasury before it's handed
-// back, so this can be slower than the other ensure* calls (a real
-// on-chain transaction, not just a DB insert).
+// Called automatically from ensureAccount above too, but deliberately NOT
+// awaited there (fire-and-forget) — unlike ensureStellarWallet, "creating a
+// wallet" here really does mean a brand-new on-chain address (see
+// solanaAdapter.ts), pre-funded from the treasury before it's handed back,
+// so this is meaningfully slower (a real on-chain transaction, not just a
+// DB insert) and shouldn't sit inside every signup's response time. Kept
+// as its own exported function since GET /wallets/solana and the chat
+// deposit-chain flow also call it directly — idempotent either way, and
+// that direct/on-demand path is the safety net for the rare case someone
+// asks for their Solana address before the background call from signup has
+// finished (or if it failed and needs a retry).
 export async function ensureSolanaWallet(userId: string): Promise<Wallet> {
   const existing = await walletsRepo.findByUserIdAndChain(userId, "solana");
   if (existing) return existing;
