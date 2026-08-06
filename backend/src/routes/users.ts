@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { env } from "../config/env.js";
 import { ledgerRepo } from "../domain/ledger/repository.js";
 import { usersRepo } from "../domain/users/repository.js";
 import { toPublicUser } from "../domain/users/publicUser.js";
@@ -17,7 +18,7 @@ usersRouter.get("/me", requireAuth, async (req: Request, res: Response) => {
     return;
   }
   const [wallet, balances] = await Promise.all([
-    walletsRepo.findByUserId(user.id),
+    walletsRepo.findByUserIdAndChain(user.id, env.defaultChain),
     ledgerRepo.getBalancesForUser(user.id),
   ]);
   res.json({ user: toPublicUser(user), wallet, balances });

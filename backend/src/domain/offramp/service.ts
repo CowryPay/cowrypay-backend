@@ -84,7 +84,14 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     throw new Error("Incorrect PIN");
   }
 
-  const wallet = await walletsRepo.findByUserId(userId);
+  // Every EVM chain (celo/base/optimism) shares one wallet row, always
+  // registered under env.defaultChain — one KMS/Blockradar address covers
+  // all of them, so "which EVM chain to send from" (input.chain) and
+  // "which wallet row to look up" are different questions there. Stellar
+  // is the one genuine exception: its shared-address wallet is its own
+  // row, keyed under "stellar" specifically.
+  const walletChainKey = input.chain?.toLowerCase() === "stellar" ? "stellar" : env.defaultChain;
+  const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
   const chain = input.chain ?? wallet.chain;
 
@@ -159,7 +166,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
   let payout;
   try {
-    payout = await getWalletAdapter().withdraw({
+    payout = await getWalletAdapter(chain).withdraw({
       chain,
       tokenSymbol: env.defaultTokenSymbol,
       toAddress: order.receiveAddress,
@@ -209,7 +216,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await getWalletAdapter().withdraw({
+      const feeSweep = await getWalletAdapter(chain).withdraw({
         chain,
         tokenSymbol: env.defaultTokenSymbol,
         toAddress: treasuryAddress,

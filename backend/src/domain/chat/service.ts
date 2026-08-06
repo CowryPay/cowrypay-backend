@@ -1,3 +1,4 @@
+import { env } from "../../config/env.js";
 import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
@@ -16,7 +17,7 @@ import { mergeRemittanceDrafts, resolveRemittanceIntent, type RemittanceDraft, t
 import { clearSession, getActiveSession, saveSession, touchSession } from "./sessionRepository.js";
 
 export async function getWelcomeReply(userId: string): Promise<string> {
-  const wallet = await walletsRepo.findByUserId(userId);
+  const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) throw new Error("No wallet found for user");
   return buildWelcomeMessage(wallet);
 }
@@ -51,7 +52,7 @@ export async function handleChatMessage(userId: string, message: string): Promis
   // cost the user their progress on an idle timer they didn't trigger.
   if (intent === "address") {
     await touchSession(userId);
-    const wallet = await walletsRepo.findByUserId(userId);
+    const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
     if (!wallet) throw new Error("No wallet found for user");
     return { reply: buildAddressMessage(wallet) };
   }
@@ -73,7 +74,7 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   if (intent === "chains") {
     await touchSession(userId);
-    const wallet = await walletsRepo.findByUserId(userId);
+    const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
     if (!wallet) throw new Error("No wallet found for user");
     return { reply: buildChainsMessage(wallet) };
   }
