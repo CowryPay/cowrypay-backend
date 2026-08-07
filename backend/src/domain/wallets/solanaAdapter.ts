@@ -93,6 +93,34 @@ export async function signAndSendTransaction(
   return getSignatureFromTransaction(signedTx);
 }
 
+// Best-effort — never blocks or fails wallet creation. Keeps the existing
+// Helius webhook's accountAddresses in sync as new wallets are created, so
+// a new user's deposits are actually detected without anyone remembering
+// to register them by hand. A fuller, self-healing periodic-reconciliation
+// job (re-derive the full watch-list from the DB on an interval) is the
+// more robust long-term design; this synchronous append is the minimal
+// version that covers the common case for now.
+async function registerSolanaWebhookAddress(address: string): Promise<void> {
+  if (!env.heliusApiKey || !env.heliusWebhookId) return;
+  try {
+    const base = `https://mainnet.helius-rpc.com/v0/webhooks/${env.heliusWebhookId}`;
+    const getRes = await fetch(`${base}?api-key=${env.heliusApiKey}`);
+    if (!getRes.ok) throw new Error(`GET webhook failed (${getRes.status}): ${await getRes.text()}`);
+    const current = (await getRes.json()) as { accountAddresses?: string[] };
+    const addresses = current.accountAddresses ?? [];
+    if (addresses.includes(address)) return; // already watched, nothing to do
+
+    const putRes = await fetch(`${base}?api-key=${env.heliusApiKey}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...current, accountAddresses: [...addresses, address] }),
+    });
+    if (!putRes.ok) throw new Error(`PUT webhook failed (${putRes.status}): ${await putRes.text()}`);
+  } catch (err) {
+    console.error(`[solana-adapter] failed to register ${address} with Helius webhook:`, err);
+  }
+}
+
 // Solana's own official exchange-integration guide recommends a unique
 // deposit account per user — the opposite of Stellar's shared address, and
 // much closer to how the EVM self-custody chains already work here. Unlike
@@ -132,6 +160,8 @@ export const solanaWalletAdapter: WalletAdapter = {
     // this already" cleanly, so a hard failure just surfaces as a clean
     // retry, not a silently broken wallet.
     await signAndSendTransaction(treasury, [transferIx, createAtaIx]);
+
+    await registerSolanaWebhookAddress(address);
 
     return { externalWalletId: ciphertext, address, chain: "solana" };
   },

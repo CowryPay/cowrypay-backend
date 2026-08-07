@@ -167,7 +167,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
   let payout;
   try {
-    payout = await getWalletAdapter(chain).withdraw({
+    payout = await getWalletAdapter(chain, wallet.provider).withdraw({
       chain,
       tokenSymbol: env.defaultTokenSymbol,
       toAddress: order.receiveAddress,
@@ -224,7 +224,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await getWalletAdapter(chain).withdraw({
+      const feeSweep = await getWalletAdapter(chain, wallet.provider).withdraw({
         chain,
         tokenSymbol: env.defaultTokenSymbol,
         toAddress: treasuryAddress,

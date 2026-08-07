@@ -12,22 +12,33 @@ import { solanaWalletAdapter } from "./solanaAdapter.js";
 // provider is active (a user can hold USDC on Celo, Stellar, and Solana
 // all at once), not replace it — so both are checked first, independent of
 // env.walletProvider entirely.
-export function getWalletAdapter(chain: string): WalletAdapter {
+//
+// `explicitProvider` makes EVM dispatch per-wallet too, not just
+// per-chain. Without it, a withdraw() call would grab whatever
+// WALLET_PROVIDER currently says globally, regardless of which provider
+// actually custodies a given user's wallet — safe only as long as an
+// environment never has two EVM providers' wallets coexisting. That
+// stopped being true the moment production needed to deprecate Blockradar
+// for new signups while 24 existing users (2 with real balances) still
+// have Blockradar-custodied wallets: flipping WALLET_PROVIDER globally
+// would make their next send sign with the wrong key entirely. Callers
+// that already have a wallet row in hand (offramp/service.ts) pass
+// wallet.provider explicitly; callers creating a brand-new wallet
+// (users/service.ts) have no existing provider to honor, so they
+// correctly fall through to the current env default.
+export function getWalletAdapter(chain: string, explicitProvider?: string): WalletAdapter {
   const c = chain.toLowerCase();
   if (c === "stellar") return stellarWalletAdapter;
   if (c === "solana") return solanaWalletAdapter;
-  switch (env.walletProvider) {
+  const provider = explicitProvider ?? env.walletProvider;
+  switch (provider) {
     case "mock":
       return mockWalletAdapter;
     case "blockradar":
       return blockradarWalletAdapter;
-    // Phase 1 (wallet creation only) of the self-custody migration — never
-    // set on Railway/production, only reachable via a local/staging env
-    // override. See the wallet-migration plan for what's still missing
-    // (withdraw, deposit detection) before this could go live.
     case "aws-kms":
       return awsKmsWalletAdapter;
     default:
-      throw new Error(`Unknown WALLET_PROVIDER: ${env.walletProvider}`);
+      throw new Error(`Unknown wallet provider: ${provider}`);
   }
 }

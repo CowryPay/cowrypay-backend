@@ -121,4 +121,12 @@ export const env = {
   // interval — deliberately one flag, not tied to WALLET_PROVIDER, same
   // reasoning as STELLAR_DEPOSITS_ENABLED.
   solanaDepositsEnabled: process.env.SOLANA_DEPOSITS_ENABLED === "true",
+  // Used only to keep the existing Helius webhook's accountAddresses in
+  // sync as new Solana wallets are created (see solanaAdapter.ts) — a
+  // best-effort call, never required for wallet creation itself to
+  // succeed. Not the same as SOLANA_WEBHOOK_SECRET (that's what Helius
+  // sends back to verify inbound calls; this is what we send to Helius's
+  // own management API).
+  heliusApiKey: process.env.HELIUS_API_KEY,
+  heliusWebhookId: process.env.HELIUS_WEBHOOK_ID,
 };
