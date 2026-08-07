@@ -23,3 +23,15 @@ adminRouter.get("/admin/metrics", async (req: Request, res: Response) => {
   const metrics = await adminRepo.getMetrics();
   res.json(metrics);
 });
+
+// Diagnostic: "why didn't the fee reach treasury" — shows each send's fee
+// amount next to what the fee-sweep step actually logged, since a send
+// reaching PAYOUT_INITIATED/COMPLETE says nothing about the fee sweep
+// specifically (it's a best-effort step separate from the main payout).
+adminRouter.get("/admin/sends", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const chain = typeof req.query.chain === "string" ? req.query.chain : undefined;
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const sends = await adminRepo.listRecentSends(chain, limit);
+  res.json({ sends });
+});

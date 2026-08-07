@@ -71,6 +71,22 @@ export interface AdminMetrics {
   };
 }
 
+export interface AdminSendDiagnostic {
+  id: string;
+  chain: string;
+  amountHuman: string;
+  feeAmount: string | null;
+  treasuryAddress: string | null;
+  state: string;
+  withdrawTxHash: string | null;
+  createdAt: string;
+  // The most recent transition whose trigger mentions the fee sweep
+  // (offramp/service.ts logs "fee_swept:<hash>" or
+  // "fee_sweep_failed: <error>") — null means the fee-sweep step was never
+  // reached at all (e.g. the payout itself failed before getting there).
+  feeSweepTrigger: string | null;
+}
+
 // One-shot cross-user aggregate read for the admin overview dashboard —
 // deliberately separate from every other repository here, which are all
 // scoped to a single user's own data by design (every route in this
@@ -255,5 +271,40 @@ export const adminRepo = {
         byChain: revenueChainBreakdown,
       },
     };
+  },
+
+  // Debugging aid for "why didn't the fee reach treasury" reports — surfaces
+  // each send's fee amount next to whatever the fee-sweep step actually
+  // logged (success, failure, or "never got there"), instead of guessing
+  // from the send's own state alone (PAYOUT_INITIATED/COMPLETE say nothing
+  // about whether the *fee* sweep specifically succeeded — see
+  // offramp/service.ts, where the fee sweep is a best-effort step separate
+  // from the main payout).
+  async listRecentSends(chain: string | undefined, limit: number): Promise<AdminSendDiagnostic[]> {
+    const { rows } = await pool.query(
+      `select s.id, s.chain, s.amount_human, s.fee_amount, s.treasury_address, s.state,
+              s.withdraw_tx_hash, s.created_at,
+              (
+                select t.trigger from send_state_transitions t
+                where t.send_id = s.id and t.trigger like 'fee_swe%'
+                order by t.created_at desc limit 1
+              ) as fee_sweep_trigger
+       from sends s
+       where ($1::text is null or s.chain = $1)
+       order by s.created_at desc
+       limit $2`,
+      [chain ?? null, limit],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      chain: r.chain,
+      amountHuman: r.amount_human,
+      feeAmount: r.fee_amount,
+      treasuryAddress: r.treasury_address,
+      state: r.state,
+      withdrawTxHash: r.withdraw_tx_hash,
+      createdAt: r.created_at,
+      feeSweepTrigger: r.fee_sweep_trigger,
+    }));
   },
 };
