@@ -5,6 +5,7 @@ import { depositsRepo } from "../domain/deposits/repository.js";
 import { ingestDeposit, resolveManualReview } from "../domain/deposits/stateMachine.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { requireAdminKey } from "../middleware/requireAdminKey.js";
 
 export const depositsRouter = Router();
 
@@ -68,22 +69,6 @@ const ReviewSchema = z.object({
   decision: z.enum(["approve", "reject"]),
   actor: z.string().optional(),
 });
-
-// No role/permission system exists yet — gated by a shared secret header
-// instead of requireAuth (a real user JWT proves identity, not admin
-// privilege). Without this, anyone on the internet could force-approve or
-// reject a flagged deposit with no authorization at all.
-function requireAdminKey(req: Request, res: Response): boolean {
-  if (!env.adminApiKey) {
-    res.status(503).json({ error: "admin endpoint not configured" });
-    return false;
-  }
-  if (req.header("x-admin-key") !== env.adminApiKey) {
-    res.status(401).json({ error: "invalid admin key" });
-    return false;
-  }
-  return true;
-}
 
 // Closes the MANUAL_REVIEW branch of the state machine — without this, a
 // flagged deposit would have no way back to a terminal state.

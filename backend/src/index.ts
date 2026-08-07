@@ -15,6 +15,7 @@ import { pinRouter } from "./routes/pin.js";
 import { recipientsRouter } from "./routes/recipients.js";
 import { signupRouter } from "./routes/signup.js";
 import { usersRouter } from "./routes/users.js";
+import { adminRouter } from "./routes/admin.js";
 import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
@@ -42,6 +43,7 @@ app.use(chatRouter);
 app.use(stellarWalletRouter);
 app.use(solanaWalletRouter);
 app.use(solanaWebhookRouter);
+app.use(adminRouter);
 
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
