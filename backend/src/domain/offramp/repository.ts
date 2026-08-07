@@ -166,4 +166,16 @@ export const sendsRepo = {
   async markWithdrawConfirmed(client: PoolClient, id: string): Promise<void> {
     await client.query(`update sends set withdraw_confirmed_at = now() where id = $1`, [id]);
   },
+
+  // Safety net for paycrestSettlementPoller.ts — every send genuinely
+  // waiting on Paycrest's payment_order.* webhook to advance it further.
+  // Real incident that motivated this: the webhook never reached either
+  // environment at all (confirmed via Railway HTTP logs — zero hits ever)
+  // while Paycrest's own dashboard showed these same orders as settled.
+  async findAwaitingSettlement(): Promise<Send[]> {
+    const { rows } = await pool.query(
+      `select * from sends where state in ('PAYOUT_INITIATED', 'SETTLING') and provider_order_id is not null`,
+    );
+    return rows.map(mapSend);
+  },
 };

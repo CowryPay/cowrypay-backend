@@ -20,6 +20,7 @@ import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
+import { startPaycrestSettlementPoller } from "./domain/offramp/paycrestSettlementPoller.js";
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
@@ -50,6 +51,7 @@ app.listen(env.port, () => {
 });
 
 startWithdrawConfirmationPoller();
+startPaycrestSettlementPoller();
 startDepositScanner();
 startDepositSweeper();
 startStellarDepositScanner();
