@@ -108,6 +108,37 @@ export function buildBalanceMessage(balances: LedgerBalance[]): string {
   return `💰 Balance:\n${balanceLines}`;
 }
 
+// Shown once a send actually reaches COMPLETE (Paycrest's payment_order.settled
+// webhook, not the "processing" message initiateSend returns at submission
+// time) — layout matches the user's AZZA-style reference receipt, but with
+// "Sent"/"for" instead of the reference's "Buy"/"with": this is an off-ramp
+// (user sends/sells crypto, receives fiat), not an on-ramp purchase, and
+// "Sent" also matches the wording initiateSend's own "processing" message
+// already uses for the same transaction.
+export function buildSendCompletedMessage(send: Send): string {
+  const netAmount = Number(send.amountHuman) - Number(send.feeAmount ?? "0");
+  const fiatAmount =
+    send.rate != null && Number.isFinite(Number(send.rate)) ? netAmount * Number(send.rate) : null;
+  const fiatLine =
+    fiatAmount != null ? `${send.fiatCurrency} ${fiatAmount.toFixed(2)}` : send.fiatCurrency;
+  const { accountName, accountIdentifier, institutionName, institution } = send.recipient;
+  // Last-4 masking, matching the existing convention in the receipt route
+  // (routes/offramp.ts's accountIdentifierMasked) — this is the user's own
+  // recipient, shown to confirm it's the right one, not a full account
+  // number dump.
+  const maskedAccount = `••••${accountIdentifier.slice(-4)}`;
+
+  return [
+    `✅ Your transaction with the following details has been completed:`,
+    ``,
+    `💲Sent ${formatAmount(send.amountHuman)} ${send.tokenSymbol} on ${send.chain.toUpperCase()} for ${fiatLine}`,
+    ``,
+    `To: ${accountName} — ${institutionName ?? institution} ${maskedAccount}`,
+    ``,
+    `Expect your funds within 1 - 5 minutes`,
+  ].join("\n");
+}
+
 export function buildHelpMessage(): string {
   return [
     "Here's what I can help with right now:",

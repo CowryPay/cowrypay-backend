@@ -14,6 +14,10 @@ export interface SavedRecipient {
   createdAt: string;
 }
 
+function normalizeAccountIdentifier(accountIdentifier: string): string {
+  return accountIdentifier.replace(/\s+/g, "").toUpperCase();
+}
+
 function mapRow(row: any): SavedRecipient {
   return {
     id: row.id,
@@ -52,14 +56,23 @@ export const recipientsRepo = {
   // user re-enters it fresh instead of referencing it by nickname — without
   // this, the caller has no way to tell the frontend not to prompt to save
   // an already-saved recipient again.
+  //
+  // Compared normalized (trim + strip whitespace + case-fold), not raw —
+  // account_identifier here comes from free-text LLM extraction each time
+  // (schemas.ts's bare z.string()), so "0123456789" entered a second time
+  // with a stray space or different case would otherwise silently miss and
+  // re-prompt the user to save a recipient they already saved.
   async findByAccountIdentifier(
     userId: string,
     institution: string,
     accountIdentifier: string,
   ): Promise<SavedRecipient | null> {
     const all = await recipientsRepo.getForUser(userId);
+    const target = normalizeAccountIdentifier(accountIdentifier);
     return (
-      all.find((r) => r.institution === institution && r.accountIdentifier === accountIdentifier) ?? null
+      all.find(
+        (r) => r.institution === institution && normalizeAccountIdentifier(r.accountIdentifier) === target,
+      ) ?? null
     );
   },
 

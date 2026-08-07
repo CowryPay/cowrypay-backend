@@ -11,6 +11,8 @@ import {
   getSignatureFromTransaction,
   sendAndConfirmTransactionFactory,
   lamports,
+  isSolanaError,
+  SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
 } from "@solana/kit";
 import { getTransferSolInstruction } from "@solana-program/system";
 import {
@@ -21,7 +23,12 @@ import {
 } from "@solana-program/token";
 import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
+import { SolanaTreasuryLiquidityError } from "./adapter.js";
 import { generateAndEncryptSolanaKeyPair, decryptSolanaSigner, getSolanaTreasurySigner } from "./solanaKms.js";
+
+// Support contact shown to users when the treasury itself can't afford to
+// fund a new deposit address — an ops problem, not something a retry fixes.
+const SUPPORT_TELEGRAM_LINK = "https://t.me/+OV3fAjsqmrtlZmY8";
 
 export const USDC_DECIMALS = 6;
 
@@ -159,7 +166,29 @@ export const solanaWalletAdapter: WalletAdapter = {
     // retry-on-conflict pattern already handles "concurrent call created
     // this already" cleanly, so a hard failure just surfaces as a clean
     // retry, not a silently broken wallet.
-    await signAndSendTransaction(treasury, [transferIx, createAtaIx]);
+    try {
+      await signAndSendTransaction(treasury, [transferIx, createAtaIx]);
+    } catch (err) {
+      // Seen live: treasury runs low on SOL and the preflight simulation
+      // rejects the transfer with "insufficient lamports X, need Y" in its
+      // logs (RPC code -32002) — every route/chat layer above this just
+      // relays err.message verbatim, so the fix has to happen right here,
+      // at the one place that actually knows why this failed.
+      if (
+        isSolanaError(err, SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE) &&
+        err.context.logs?.some((line) => line.includes("insufficient lamports"))
+      ) {
+        console.error(
+          `[solana-adapter] treasury ${treasury.address} is too low on SOL to fund a new wallet — needs topping up.`,
+          err.context.logs,
+        );
+        throw new SolanaTreasuryLiquidityError(
+          `We're temporarily unable to set up your Solana deposit address due to a system issue on our end. ` +
+            `Please reach out to our Telegram community and we'll get this sorted for you: ${SUPPORT_TELEGRAM_LINK}`,
+        );
+      }
+      throw err;
+    }
 
     await registerSolanaWebhookAddress(address);
 

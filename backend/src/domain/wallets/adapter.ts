@@ -22,6 +22,21 @@ export class PayoutLiquidityError extends Error {
   }
 }
 
+// Same reasoning as PayoutLiquidityError, but for the Solana-specific
+// funding step: creating a new user's deposit address requires the
+// treasury to pay for that address's rent-exemption + USDC Associated
+// Token Account up front (see solanaAdapter.ts's createWallet doc
+// comment) — if the treasury itself is short on SOL, that pre-funding
+// transaction fails on-chain (Solana RPC code -32002, "insufficient
+// lamports" in the simulation logs) and the raw error is not something a
+// non-technical user can act on. Seen live in production.
+export class SolanaTreasuryLiquidityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SolanaTreasuryLiquidityError";
+  }
+}
+
 export interface WithdrawResult {
   // Blockradar can accept a withdraw for AML/compliance screening and return
   // no hash yet (confirmed live: a 200 with no data.errors and no hash,

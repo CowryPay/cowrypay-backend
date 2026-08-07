@@ -5,6 +5,7 @@ import { getInstitutions, getOfframpRate, verifyRecipientAccount } from "../doma
 import { initiateSend } from "../domain/offramp/service.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
 import { formatAmount } from "../utils/format.js";
+import { buildSendCompletedMessage } from "../ai-agent/chat/responses.js";
 
 export const offrampRouter = Router();
 
@@ -120,7 +121,11 @@ offrampRouter.get("/offramp/sends/:id", requireAuth, async (req: Request, res: R
     return;
   }
   const transitions = await sendsRepo.getTransitions(send.id);
-  res.json({ send, transitions });
+  // Only present once the send has actually settled — same "don't claim
+  // done before it's done" stance as initiateSend's own "processing"
+  // message (see domain/offramp/service.ts's InitiatedSend doc comment).
+  const message = send.state === "COMPLETE" ? buildSendCompletedMessage(send) : undefined;
+  res.json({ send, transitions, message });
 });
 
 offrampRouter.get("/offramp/sends", requireAuth, async (req: Request, res: Response) => {
