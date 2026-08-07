@@ -1,0 +1,156 @@
+import { createPublicClient, http, erc20Abi, formatEther } from "viem";
+import { Horizon } from "@stellar/stellar-sdk";
+import { address as toAddress, createSolanaRpc } from "@solana/kit";
+import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
+import { env } from "../../config/env.js";
+import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
+import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
+import { getSolanaTreasurySigner } from "../wallets/solanaKms.js";
+import { sendTelegramOpsAlert } from "./telegram.js";
+
+interface BalanceCheck {
+  key: string; // stable id for alert-state tracking, e.g. "base-gas"
+  label: string; // human-readable, e.g. "Base gas (ETH)"
+  balance: string;
+  threshold: string;
+  ok: boolean;
+}
+
+async function checkEvmChain(chain: string, payoutAddress: `0x${string}`): Promise<BalanceCheck[]> {
+  const { viemChain, rpcUrl, usdcAddress, gasBufferThreshold } = getChainConfig(chain);
+  const client = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
+
+  const [nativeBalance, usdcBalance] = await Promise.all([
+    client.getBalance({ address: payoutAddress }),
+    client.readContract({ address: usdcAddress, abi: erc20Abi, functionName: "balanceOf", args: [payoutAddress] }),
+  ]);
+
+  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
+  return [
+    {
+      key: `${chain}-gas`,
+      label: `${chain} gas (native)`,
+      balance: formatEther(nativeBalance),
+      threshold: formatEther(gasBufferThreshold),
+      ok: nativeBalance >= gasBufferThreshold,
+    },
+    {
+      key: `${chain}-usdc`,
+      label: `${chain} payout USDC`,
+      balance: (Number(usdcBalance) / 1e6).toFixed(4),
+      threshold: String(usdcThreshold),
+      ok: Number(usdcBalance) / 1e6 >= usdcThreshold,
+    },
+  ];
+}
+
+async function checkStellar(): Promise<BalanceCheck[]> {
+  if (!env.stellarDepositAddress || !env.stellarUsdcIssuer) return [];
+  const server = new Horizon.Server(env.stellarHorizonUrl);
+  const account = await server.loadAccount(env.stellarDepositAddress);
+
+  const nativeBalance = Number(account.balances.find((b) => b.asset_type === "native")?.balance ?? "0");
+  const usdcBalance = Number(
+    account.balances.find((b) => "asset_code" in b && b.asset_code === "USDC" && b.asset_issuer === env.stellarUsdcIssuer)
+      ?.balance ?? "0",
+  );
+  const xlmThreshold = Number(env.stellarXlmAlertThreshold);
+  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
+
+  return [
+    {
+      key: "stellar-gas",
+      label: "Stellar gas (XLM)",
+      balance: String(nativeBalance),
+      threshold: String(xlmThreshold),
+      ok: nativeBalance >= xlmThreshold,
+    },
+    {
+      key: "stellar-usdc",
+      label: "Stellar payout USDC",
+      balance: String(usdcBalance),
+      threshold: String(usdcThreshold),
+      ok: usdcBalance >= usdcThreshold,
+    },
+  ];
+}
+
+async function checkSolana(): Promise<BalanceCheck[]> {
+  if (!env.solanaTreasurySigningKeyCiphertext || !env.solanaUsdcMint) return [];
+  const treasury = await getSolanaTreasurySigner();
+  const rpc = createSolanaRpc(env.solanaRpcUrl);
+  const owner = toAddress(treasury.address);
+  const mint = toAddress(env.solanaUsdcMint);
+
+  const [solBalance, [treasuryAta]] = await Promise.all([
+    rpc.getBalance(owner).send(),
+    findAssociatedTokenPda({ owner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
+  ]);
+  const usdcResult = await rpc.getTokenAccountBalance(treasuryAta).send().catch(() => null);
+  const usdcBalance = usdcResult ? Number(usdcResult.value.amount) / 1e6 : 0;
+
+  const solThreshold = Number(env.solanaSolAlertThreshold);
+  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
+  const solBalanceHuman = Number(solBalance.value) / 1e9;
+
+  return [
+    {
+      key: "solana-gas",
+      label: "Solana treasury (SOL)",
+      balance: String(solBalanceHuman),
+      threshold: String(solThreshold),
+      ok: solBalanceHuman >= solThreshold,
+    },
+    {
+      key: "solana-usdc",
+      label: "Solana payout USDC",
+      balance: String(usdcBalance),
+      threshold: String(usdcThreshold),
+      ok: usdcBalance >= usdcThreshold,
+    },
+  ];
+}
+
+// Which checks are currently below threshold, as of the last cycle — used
+// to alert only on a state CHANGE (crossing below, or recovering back
+// above) instead of repeating the same alert every single cycle forever
+// while a wallet stays low. Resets on deploy/restart (in-memory, not
+// DB-backed) — the acceptable cost of keeping this simple is at most one
+// duplicate alert right after a deploy, not an ongoing spam risk.
+const currentlyBreached = new Set<string>();
+
+export async function runGasStatusCheck(): Promise<void> {
+  const checks: BalanceCheck[] = [];
+
+  if (env.awsKmsPayoutKeyArn) {
+    const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
+    for (const chain of SUPPORTED_CHAINS) {
+      checks.push(...(await checkEvmChain(chain, payoutAddress)));
+    }
+  }
+  checks.push(...(await checkStellar()));
+  checks.push(...(await checkSolana()));
+
+  const newlyBreached = checks.filter((c) => !c.ok && !currentlyBreached.has(c.key));
+  const recovered = checks.filter((c) => c.ok && currentlyBreached.has(c.key));
+
+  for (const c of newlyBreached) currentlyBreached.add(c.key);
+  for (const c of recovered) currentlyBreached.delete(c.key);
+
+  if (newlyBreached.length > 0) {
+    const lines = newlyBreached.map((c) => `⚠️ <b>${c.label}</b>: ${c.balance} (below threshold ${c.threshold})`);
+    await sendTelegramOpsAlert(`<b>CowryPay liquidity alert</b>\n\n${lines.join("\n")}`);
+  }
+  if (recovered.length > 0) {
+    const lines = recovered.map((c) => `✅ <b>${c.label}</b>: ${c.balance} (back above ${c.threshold})`);
+    await sendTelegramOpsAlert(`<b>CowryPay liquidity recovered</b>\n\n${lines.join("\n")}`);
+  }
+}
+
+const CHECK_INTERVAL_MS = 10 * 60_000;
+
+export function startGasStatusMonitor(): void {
+  setInterval(() => {
+    runGasStatusCheck().catch((err) => console.error("[gas-status-monitor]", err));
+  }, CHECK_INTERVAL_MS);
+}

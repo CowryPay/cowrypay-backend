@@ -129,4 +129,23 @@ export const env = {
   // own management API).
   heliusApiKey: process.env.HELIUS_API_KEY,
   heliusWebhookId: process.env.HELIUS_WEBHOOK_ID,
+  // Ops-only alerting (gasStatusMonitor.ts) — a private Telegram chat, never
+  // the public support group linked in chat replies. Both required for the
+  // monitor to actually send anything; unset just means it logs instead of
+  // posting (see gasStatusMonitor.ts's own guard).
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+  telegramOpsChatId: process.env.TELEGRAM_OPS_CHAT_ID,
+  // Below this, gasStatusMonitor.ts alerts that a payout/treasury wallet's
+  // USDC liquidity is running low — one global default (not per-chain)
+  // since there's no principled reason today's Base/Celo/Optimism/Stellar/
+  // Solana volumes need different thresholds; override if that changes.
+  payoutUsdcAlertThreshold: process.env.PAYOUT_USDC_ALERT_THRESHOLD ?? "20",
+  // Stellar's native gas token (XLM) — Stellar fees are tiny, so this is a
+  // generous default, not a tightly calibrated one.
+  stellarXlmAlertThreshold: process.env.STELLAR_XLM_ALERT_THRESHOLD ?? "5",
+  // Solana's treasury needs ~0.0031 SOL per new wallet created (see
+  // solanaAdapter.ts's SYSTEM_ACCOUNT_RENT_LAMPORTS + ATA_RENT_LAMPORTS) —
+  // 0.05 SOL is roughly 16 signups' worth of runway, the same real incident
+  // this whole monitor was built in response to.
+  solanaSolAlertThreshold: process.env.SOLANA_SOL_ALERT_THRESHOLD ?? "0.05",
 };

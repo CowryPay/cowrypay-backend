@@ -25,6 +25,7 @@ import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
 import { startSolanaDepositSweeper } from "./domain/wallets/solanaDepositSweeper.js";
+import { startGasStatusMonitor } from "./domain/monitoring/gasStatusMonitor.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -56,3 +57,4 @@ startDepositScanner();
 startDepositSweeper();
 startStellarDepositScanner();
 startSolanaDepositSweeper();
+startGasStatusMonitor();
