@@ -1,7 +1,6 @@
-import { createPublicClient, http, erc20Abi, formatEther } from "viem";
+import { createPublicClient, http, formatEther } from "viem";
 import { Horizon } from "@stellar/stellar-sdk";
 import { address as toAddress, createSolanaRpc } from "@solana/kit";
-import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
 import { env } from "../../config/env.js";
 import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
@@ -16,16 +15,18 @@ interface BalanceCheck {
   ok: boolean;
 }
 
+// Gas only, deliberately not USDC liquidity — this monitor exists
+// specifically so the payout wallet never gets too low on native token to
+// send the sweep's own gas top-up to a user's deposit address (the exact
+// "total cost of executing this transaction exceeds the balance of the
+// account" incident that motivated building this at all). USDC liquidity
+// for withdrawals is a real, separate concern, but not this monitor's job.
 async function checkEvmChain(chain: string, payoutAddress: `0x${string}`): Promise<BalanceCheck[]> {
-  const { viemChain, rpcUrl, usdcAddress, gasBufferThreshold } = getChainConfig(chain);
+  const { viemChain, rpcUrl, gasBufferThreshold } = getChainConfig(chain);
   const client = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
 
-  const [nativeBalance, usdcBalance] = await Promise.all([
-    client.getBalance({ address: payoutAddress }),
-    client.readContract({ address: usdcAddress, abi: erc20Abi, functionName: "balanceOf", args: [payoutAddress] }),
-  ]);
+  const nativeBalance = await client.getBalance({ address: payoutAddress });
 
-  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
   return [
     {
       key: `${chain}-gas`,
@@ -34,28 +35,16 @@ async function checkEvmChain(chain: string, payoutAddress: `0x${string}`): Promi
       threshold: formatEther(gasBufferThreshold),
       ok: nativeBalance >= gasBufferThreshold,
     },
-    {
-      key: `${chain}-usdc`,
-      label: `${chain} payout USDC`,
-      balance: (Number(usdcBalance) / 1e6).toFixed(4),
-      threshold: String(usdcThreshold),
-      ok: Number(usdcBalance) / 1e6 >= usdcThreshold,
-    },
   ];
 }
 
 async function checkStellar(): Promise<BalanceCheck[]> {
-  if (!env.stellarDepositAddress || !env.stellarUsdcIssuer) return [];
+  if (!env.stellarDepositAddress) return [];
   const server = new Horizon.Server(env.stellarHorizonUrl);
   const account = await server.loadAccount(env.stellarDepositAddress);
 
   const nativeBalance = Number(account.balances.find((b) => b.asset_type === "native")?.balance ?? "0");
-  const usdcBalance = Number(
-    account.balances.find((b) => "asset_code" in b && b.asset_code === "USDC" && b.asset_issuer === env.stellarUsdcIssuer)
-      ?.balance ?? "0",
-  );
   const xlmThreshold = Number(env.stellarXlmAlertThreshold);
-  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
 
   return [
     {
@@ -65,32 +54,17 @@ async function checkStellar(): Promise<BalanceCheck[]> {
       threshold: String(xlmThreshold),
       ok: nativeBalance >= xlmThreshold,
     },
-    {
-      key: "stellar-usdc",
-      label: "Stellar payout USDC",
-      balance: String(usdcBalance),
-      threshold: String(usdcThreshold),
-      ok: usdcBalance >= usdcThreshold,
-    },
   ];
 }
 
 async function checkSolana(): Promise<BalanceCheck[]> {
-  if (!env.solanaTreasurySigningKeyCiphertext || !env.solanaUsdcMint) return [];
+  if (!env.solanaTreasurySigningKeyCiphertext) return [];
   const treasury = await getSolanaTreasurySigner();
   const rpc = createSolanaRpc(env.solanaRpcUrl);
   const owner = toAddress(treasury.address);
-  const mint = toAddress(env.solanaUsdcMint);
 
-  const [solBalance, [treasuryAta]] = await Promise.all([
-    rpc.getBalance(owner).send(),
-    findAssociatedTokenPda({ owner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
-  ]);
-  const usdcResult = await rpc.getTokenAccountBalance(treasuryAta).send().catch(() => null);
-  const usdcBalance = usdcResult ? Number(usdcResult.value.amount) / 1e6 : 0;
-
+  const solBalance = await rpc.getBalance(owner).send();
   const solThreshold = Number(env.solanaSolAlertThreshold);
-  const usdcThreshold = Number(env.payoutUsdcAlertThreshold);
   const solBalanceHuman = Number(solBalance.value) / 1e9;
 
   return [
@@ -100,13 +74,6 @@ async function checkSolana(): Promise<BalanceCheck[]> {
       balance: String(solBalanceHuman),
       threshold: String(solThreshold),
       ok: solBalanceHuman >= solThreshold,
-    },
-    {
-      key: "solana-usdc",
-      label: "Solana payout USDC",
-      balance: String(usdcBalance),
-      threshold: String(usdcThreshold),
-      ok: usdcBalance >= usdcThreshold,
     },
   ];
 }

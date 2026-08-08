@@ -135,11 +135,6 @@ export const env = {
   // posting (see gasStatusMonitor.ts's own guard).
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
   telegramOpsChatId: process.env.TELEGRAM_OPS_CHAT_ID,
-  // Below this, gasStatusMonitor.ts alerts that a payout/treasury wallet's
-  // USDC liquidity is running low — one global default (not per-chain)
-  // since there's no principled reason today's Base/Celo/Optimism/Stellar/
-  // Solana volumes need different thresholds; override if that changes.
-  payoutUsdcAlertThreshold: process.env.PAYOUT_USDC_ALERT_THRESHOLD ?? "20",
   // Stellar's native gas token (XLM) — Stellar fees are tiny, so this is a
   // generous default, not a tightly calibrated one.
   stellarXlmAlertThreshold: process.env.STELLAR_XLM_ALERT_THRESHOLD ?? "5",
