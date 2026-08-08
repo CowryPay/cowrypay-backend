@@ -119,7 +119,7 @@ async function checkSolana(): Promise<BalanceCheck[]> {
 // duplicate alert right after a deploy, not an ongoing spam risk.
 const currentlyBreached = new Set<string>();
 
-export async function runGasStatusCheck(): Promise<void> {
+async function getAllChecks(): Promise<BalanceCheck[]> {
   const checks: BalanceCheck[] = [];
 
   if (env.awsKmsPayoutKeyArn) {
@@ -130,6 +130,14 @@ export async function runGasStatusCheck(): Promise<void> {
   }
   checks.push(...(await checkStellar()));
   checks.push(...(await checkSolana()));
+  return checks;
+}
+
+// Fast-path detection, on the same 10-minute cadence as the deposit
+// sweeper — only posts when something actually crosses a threshold
+// (either direction), so this alone never spams the channel.
+export async function runGasStatusCheck(): Promise<void> {
+  const checks = await getAllChecks();
 
   const newlyBreached = checks.filter((c) => !c.ok && !currentlyBreached.has(c.key));
   const recovered = checks.filter((c) => c.ok && currentlyBreached.has(c.key));
@@ -147,10 +155,27 @@ export async function runGasStatusCheck(): Promise<void> {
   }
 }
 
+// Separate from the fast-path above by design — this one always posts,
+// every hour, regardless of whether anything changed, as a standing
+// heartbeat ("is the monitor even still running") rather than an event
+// alert. Every line is shown, healthy or not, so a quiet hour still gives
+// a full picture rather than silence.
+export async function sendHourlyStatusReport(): Promise<void> {
+  const checks = await getAllChecks();
+  const lines = checks.map(
+    (c) => `${c.ok ? "✅" : "⚠️"} <b>${c.label}</b>: ${c.balance}${c.ok ? "" : ` (below threshold ${c.threshold})`}`,
+  );
+  await sendTelegramOpsAlert(`<b>CowryPay hourly gas/liquidity status</b>\n\n${lines.join("\n")}`);
+}
+
 const CHECK_INTERVAL_MS = 10 * 60_000;
+const HOURLY_REPORT_INTERVAL_MS = 60 * 60_000;
 
 export function startGasStatusMonitor(): void {
   setInterval(() => {
     runGasStatusCheck().catch((err) => console.error("[gas-status-monitor]", err));
   }, CHECK_INTERVAL_MS);
+  setInterval(() => {
+    sendHourlyStatusReport().catch((err) => console.error("[gas-status-monitor:hourly]", err));
+  }, HOURLY_REPORT_INTERVAL_MS);
 }
