@@ -1,6 +1,13 @@
 import { pool } from "../../db/pool.js";
 import { formatAmount } from "../../utils/format.js";
 
+// node-pg parses a `date` column into a JS Date at UTC midnight — this
+// normalizes it back to the same "YYYY-MM-DD" string used as the map key
+// below, so a Postgres-returned day and a JS-constructed day always match.
+function dayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 export interface AdminOverview {
   users: {
     total: number;
@@ -69,6 +76,15 @@ export interface AdminMetrics {
     totalFeesUsdc: string;
     byChain: { chain: string; feesUsdc: string }[];
   };
+}
+
+export interface AdminMetricsDay {
+  date: string; // YYYY-MM-DD
+  sendsCount: number;
+  depositsCount: number;
+  sentUsdc: string;
+  depositedUsdc: string;
+  feesUsdc: string;
 }
 
 export interface AdminSendDiagnostic {
@@ -271,6 +287,61 @@ export const adminRepo = {
         byChain: revenueChainBreakdown,
       },
     };
+  },
+
+  // Day-by-day trend for growth charts — getMetrics() above only answers
+  // "what's the total right now," which can't distinguish flat from
+  // growing. Bucketed by each row's own created_at (not a separate
+  // completion timestamp) — same simplification getMetrics() already
+  // makes, and accurate enough given off-ramp settlement here typically
+  // finishes within minutes of creation, not days later. Every day in the
+  // range is present in the output, zero-filled, even with no activity —
+  // charting libraries want a continuous series, not sparse points.
+  async getTimeseries(days: number): Promise<AdminMetricsDay[]> {
+    const [sendsByDay, depositsByDay] = await Promise.all([
+      pool.query(
+        `select date_trunc('day', created_at)::date as day,
+                count(*)::int as count,
+                coalesce(sum(amount_human), 0) as sent_usdc,
+                coalesce(sum(fee_amount), 0) as fees_usdc
+         from sends
+         where state = 'COMPLETE' and created_at >= now() - ($1 || ' days')::interval
+         group by day`,
+        [days],
+      ),
+      pool.query(
+        `select date_trunc('day', created_at)::date as day,
+                count(*)::int as count,
+                coalesce(sum(amount), 0) as deposited_usdc
+         from deposits
+         where state = 'BALANCE_CREDITED' and created_at >= now() - ($1 || ' days')::interval
+         group by day`,
+        [days],
+      ),
+    ]);
+
+    const sendsByDayMap = new Map(sendsByDay.rows.map((r) => [dayKey(r.day), r]));
+    const depositsByDayMap = new Map(depositsByDay.rows.map((r) => [dayKey(r.day), r]));
+
+    const result: AdminMetricsDay[] = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+
+      const sendRow = sendsByDayMap.get(key);
+      const depositRow = depositsByDayMap.get(key);
+
+      result.push({
+        date: key,
+        sendsCount: sendRow?.count ?? 0,
+        depositsCount: depositRow?.count ?? 0,
+        sentUsdc: formatAmount(String(sendRow?.sent_usdc ?? "0")),
+        depositedUsdc: formatAmount(String(depositRow?.deposited_usdc ?? "0")),
+        feesUsdc: formatAmount(String(sendRow?.fees_usdc ?? "0")),
+      });
+    }
+    return result;
   },
 
   // Debugging aid for "why didn't the fee reach treasury" reports — surfaces

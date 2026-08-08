@@ -24,6 +24,17 @@ adminRouter.get("/admin/metrics", async (req: Request, res: Response) => {
   res.json(metrics);
 });
 
+// Day-by-day trend for growth charts (volume/revenue over time) — /admin/metrics
+// only ever answers "what's the total right now," a single point that can't
+// distinguish flat from growing. Clamped to [1, 365] so a bad/absent query
+// param can't trigger an unbounded table scan.
+adminRouter.get("/admin/metrics/timeseries", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+  const timeseries = await adminRepo.getTimeseries(days);
+  res.json({ days, timeseries });
+});
+
 // Diagnostic: "why didn't the fee reach treasury" — shows each send's fee
 // amount next to what the fee-sweep step actually logged, since a send
 // reaching PAYOUT_INITIATED/COMPLETE says nothing about the fee sweep
