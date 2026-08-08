@@ -19,8 +19,10 @@ import { adminRouter } from "./routes/admin.js";
 import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
+import { cryptoWithdrawalsRouter } from "./routes/cryptoWithdrawals.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 import { startPaycrestSettlementPoller } from "./domain/offramp/paycrestSettlementPoller.js";
+import { startCryptoWithdrawalConfirmationPoller } from "./domain/cryptoWithdrawals/cryptoWithdrawalConfirmationPoller.js";
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
@@ -46,6 +48,7 @@ app.use(stellarWalletRouter);
 app.use(solanaWalletRouter);
 app.use(solanaWebhookRouter);
 app.use(adminRouter);
+app.use(cryptoWithdrawalsRouter);
 
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
@@ -53,6 +56,7 @@ app.listen(env.port, () => {
 
 startWithdrawConfirmationPoller();
 startPaycrestSettlementPoller();
+startCryptoWithdrawalConfirmationPoller();
 startDepositScanner();
 startDepositSweeper();
 startStellarDepositScanner();

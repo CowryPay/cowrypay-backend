@@ -118,3 +118,36 @@ export interface SendStateTransition {
   actor: string;
   createdAt: string;
 }
+
+// Crypto-to-crypto withdrawal (see db/migrations/0015) — no Paycrest order,
+// no fiat, no fee; a direct on-chain payout to a user-supplied address.
+// Simpler lifecycle than SendState: no compliance-screening/order-creation
+// steps that only exist because of Paycrest's own flow.
+export type CryptoWithdrawalState = "PENDING" | "BROADCAST" | "CONFIRMED" | "FAILED";
+
+export interface CryptoWithdrawal {
+  id: string;
+  userId: string;
+  walletId: string;
+  tokenSymbol: string;
+  chain: string;
+  amountHuman: string;
+  toAddress: string;
+  provider: string;
+  reference: string;
+  withdrawTxHash: string | null;
+  withdrawConfirmedAt: string | null;
+  state: CryptoWithdrawalState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CryptoWithdrawalStateTransition {
+  id: string;
+  cryptoWithdrawalId: string;
+  fromState: CryptoWithdrawalState | null;
+  toState: CryptoWithdrawalState;
+  trigger: string;
+  actor: string;
+  createdAt: string;
+}
