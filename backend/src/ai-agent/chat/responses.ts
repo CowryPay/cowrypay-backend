@@ -1,5 +1,27 @@
 import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 import { formatAmount } from "../../utils/format.js";
+import { DEPOSIT_CHAINS } from "./intent.js";
+
+// The non-EVM chains, each needing their own separate deposit address —
+// everything else in DEPOSIT_CHAINS shares one EVM address. Kept as an
+// explicit exclusion list (not e.g. a "chainKind" field) since there are
+// only ever a couple of these and a wrong guess here is easy to catch by
+// eye, unlike silently stale prose.
+const NON_EVM_CHAINS = new Set(["stellar", "solana"]);
+const EVM_DEPOSIT_CHAINS = DEPOSIT_CHAINS.filter((c) => !NON_EVM_CHAINS.has(c));
+
+// "Celo, Base, and Optimism" / "Celo or Base" / "Celo" — grammatically
+// correct regardless of how many chains are in the list, so removing (or
+// adding) one is just an edit to DEPOSIT_CHAINS, never prose anywhere
+// else. conjunction is "and" for "these all share X" framing (buildChainsMessage)
+// vs "or" for "pick one of these" framing (buildHelpMessage) — same list,
+// different grammar depending on which claim is being made about it.
+export function formatChainList(chains: readonly string[], conjunction: "and" | "or" = "and"): string {
+  const names = chains.map(capitalize);
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} ${conjunction} ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, ${conjunction} ${names[names.length - 1]}`;
+}
 
 // Deliberately no address here — a user now holds a genuinely different
 // deposit flow per chain (one shared EVM address vs. a shared Stellar
@@ -78,7 +100,7 @@ export function buildSolanaAddressMessage(wallet: Wallet): string {
 export function buildChainsMessage(wallet: Wallet): string {
   const evmPart =
     wallet.provider === "aws-kms"
-      ? "Celo, Base, and Optimism all share the same deposit address"
+      ? `${formatChainList(EVM_DEPOSIT_CHAINS)} all share the same deposit address`
       : `${capitalize(wallet.chain)} (your only EVM network right now)`;
   return `You can deposit USDC on several networks: ${evmPart}. Stellar and Solana each need their own separate address — just say "I want to deposit via Stellar" or "...via Solana" to get it.`;
 }
@@ -143,7 +165,7 @@ export function buildHelpMessage(): string {
   return [
     "Here's what I can help with right now:",
     `• "What's my balance?" — check your available balance`,
-    `• "I want to deposit" — get your deposit address for a specific chain (Celo, Base, Optimism, Stellar, or Solana)`,
+    `• "I want to deposit" — get your deposit address for a specific chain (${formatChainList(DEPOSIT_CHAINS, "or")})`,
     `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "My transactions" — see your recent activity`,

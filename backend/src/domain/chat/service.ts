@@ -4,7 +4,7 @@ import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { ensureStellarWallet, ensureSolanaWallet } from "../users/service.js";
-import { classifyIntent, matchDepositChainRequest } from "../../ai-agent/chat/intent.js";
+import { classifyIntent, matchDepositChainRequest, DEPOSIT_CHAINS } from "../../ai-agent/chat/intent.js";
 import {
   buildAddressMessage,
   buildBalanceMessage,
@@ -14,6 +14,7 @@ import {
   buildStellarAddressMessage,
   buildTxHistoryMessage,
   buildWelcomeMessage,
+  formatChainList,
 } from "../../ai-agent/chat/responses.js";
 import { createGroqClient, generateChatReply, parseWithLlm } from "./llm.js";
 import { mergeRemittanceDrafts, resolveRemittanceIntent, type RemittanceDraft, type RemittanceIntent } from "./remittanceDraft.js";
@@ -86,7 +87,7 @@ export async function handleChatMessage(userId: string, message: string): Promis
     const chain = depositChainRequest.chain;
 
     if (!chain) {
-      return { reply: "Which chain would you like to deposit to? Celo, Base, Optimism, Stellar, or Solana." };
+      return { reply: `Which chain would you like to deposit to? ${formatChainList(DEPOSIT_CHAINS, "or")}.` };
     }
 
     if (chain === "stellar") {

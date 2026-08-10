@@ -51,6 +51,14 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     gasTopUpAmount: parseEther("0.0001"),
     gasBufferThreshold: parseEther("0.00003"),
   },
+  // No off-ramp provider actually supports Optimism in practice (2026-08) —
+  // dropped from ai-agent/chat/intent.ts's DEPOSIT_CHAINS so it's no longer
+  // offered as a new deposit option. Deliberately kept here, though: this
+  // registry still drives deposit scanning/sweeping/gas monitoring, and the
+  // deposit address is the same one shared across every EVM chain (one KMS
+  // key) — someone could still send USDC here by accident, and any
+  // existing balance must stay detectable/sweepable/off-rampable
+  // regardless of whether it's still offered going forward.
   optimism: {
     viemChain: optimism,
     rpcUrl: env.optimismRpcUrl,

@@ -35,7 +35,18 @@ export function classifyIntent(message: string): ChatIntent {
 // went stale (still only listing the three EVM chains) the moment
 // Stellar/Solana shipped, and this file's own regexes almost suffered the
 // same fate — nothing forced either to stay in sync with the other.
-export const DEPOSIT_CHAINS = ["celo", "base", "optimism", "stellar", "solana"] as const;
+// Optimism dropped (2026-08) — no off-ramp provider actually supports it
+// (Quidax never did; Paycrest sends on it never settled in practice
+// either, confirmed via /admin/metrics showing zero completed sends on it
+// despite real deposits landing there). Deliberately NOT removed from
+// wallets/chains.ts's SUPPORTED_CHAINS — that list still drives deposit
+// scanning/sweeping/gas monitoring, which must keep watching it: the
+// address is the same one shared across every EVM chain (one KMS key), so
+// someone could still send USDC there by accident even though we no
+// longer offer it as a deposit option, and an existing balance there (if
+// any) must stay off-rampable via the dynamic fundedChains check in
+// remittanceDraft.ts, which never depended on this list to begin with.
+export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana"] as const;
 
 // "address" is included as its own trigger, not just "deposit"/"top up"/
 // etc — found live that "what's my solana address" has no "deposit" in it
