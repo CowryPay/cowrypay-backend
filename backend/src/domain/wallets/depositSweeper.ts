@@ -4,6 +4,7 @@ import { walletsRepo } from "./repository.js";
 import { kmsAccountFromKey, getWalletAddress } from "./awsKmsAdapter.js";
 import { getReceiptStatus } from "./receiptStatus.js";
 import { getChainConfig, SUPPORTED_CHAINS, MIN_SWEEP_USDC } from "./chains.js";
+import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
 
 const ERC20_ABI = [
   {
@@ -64,7 +65,24 @@ export async function sweepWallet(chain: string, wallet: SweepableWallet, payout
   if (nativeBalance < gasBufferThreshold) {
     const payoutAccount = kmsAccountFromKey(payout.keyArn, payout.address);
     const payoutWalletClient = createWalletClient({ account: payoutAccount, chain: viemChain, transport: http(rpcUrl) });
-    const topUpHash = await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount });
+    // Shares evmNonce.ts's cache with awsKmsAdapter.ts's withdraw() — both
+    // send from this same payout wallet, and a sweep cycle can top up gas
+    // for several wallets back-to-back, so this is exactly as exposed to
+    // the same nonce-collision bug that broke every fee sweep after the
+    // Alchemy RPC switch (see evmNonce.ts's own comment for the full
+    // incident). A separate, file-local nonce cache here would just
+    // recreate that bug between this function and withdraw().
+    const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payout.address);
+    let topUpHash: `0x${string}`;
+    try {
+      const nonce = await claimNonce(chain, fetchFreshNonce);
+      topUpHash = await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce });
+    } catch (err) {
+      if (!isNonceError(err)) throw err;
+      resyncNonce(chain);
+      const freshNonce = await claimNonce(chain, fetchFreshNonce);
+      topUpHash = await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce: freshNonce });
+    }
 
     let confirmed = false;
     for (let attempt = 0; attempt < TOPUP_CONFIRM_ATTEMPTS; attempt++) {

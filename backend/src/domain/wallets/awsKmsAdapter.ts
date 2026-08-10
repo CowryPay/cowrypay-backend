@@ -14,6 +14,7 @@ import {
 import { env } from "../../config/env.js";
 import { getChainConfig } from "./chains.js";
 import { PayoutLiquidityError, type CreatedWallet, type WalletAdapter, type WithdrawInput, type WithdrawResult } from "./adapter.js";
+import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
 
 function requireAwsConfig(): { region: string; accessKeyId: string; secretAccessKey: string } {
   if (!env.awsRegion || !env.awsAccessKeyId || !env.awsSecretAccessKey) {
@@ -229,12 +230,13 @@ export const awsKmsWalletAdapter: WalletAdapter = {
       chain: viemChain,
       transport: http(rpcUrl),
     });
-
     const data = encodeFunctionData({
       abi: ERC20_TRANSFER_ABI,
       functionName: "transfer",
       args: [input.toAddress as `0x${string}`, parseUnits(input.amount, usdcDecimals)],
     });
+
+    const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
 
     // Broadcast and return immediately — do NOT block on a receipt here.
     // The double-spend bug this codebase already hit once
@@ -243,13 +245,25 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     // same mistake in a new shape (a receipt-poll timeout looking like a
     // failure while the transaction actually lands). Revert/confirmation
     // checking is deliberately deferred — see the Phase 2 plan.
+    async function send(nonce: number): Promise<`0x${string}`> {
+      return walletClient.sendTransaction({ to: usdcAddress, data, value: 0n, nonce });
+    }
+
     let txHash: `0x${string}`;
     try {
-      txHash = await walletClient.sendTransaction({
-        to: usdcAddress,
-        data,
-        value: 0n,
-      });
+      const nonce = await claimNonce(input.chain, fetchFreshNonce);
+      try {
+        txHash = await send(nonce);
+      } catch (err) {
+        // The in-memory nonce cache turned out to be wrong (first use
+        // after a restart racing an old transaction, or truly out-of-band
+        // activity on this key) — resync from the chain and retry exactly
+        // once with a freshly-fetched nonce before giving up.
+        if (!isNonceError(err)) throw err;
+        resyncNonce(input.chain);
+        const freshNonce = await claimNonce(input.chain, fetchFreshNonce);
+        txHash = await send(freshNonce);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // The user's own ledger balance was already checked and atomically
