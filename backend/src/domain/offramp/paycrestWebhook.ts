@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { env } from "../../config/env.js";
 import type { SendState } from "../../types.js";
+import { resolveNextSendState as resolveNextSendStateShared } from "./sendStateTransition.js";
 
 // docs.paycrest.io — HMAC-SHA256 over the raw body, keyed with the API
 // secret. Paycrest's docs specifically say to compare using timing-safe
@@ -32,30 +33,6 @@ const EVENT_STATE_MAP: Partial<Record<string, SendState>> = {
   "payment_order.expired": "FAILED",
 };
 
-// Guards against a state going backwards if Paycrest redelivers an
-// out-of-order or duplicate webhook — only ever advances forward.
-const STATE_ORDER: SendState[] = [
-  "SEND_INSTRUCTED",
-  "COMPLIANCE_SCREENING",
-  "MANUAL_REVIEW",
-  "ORDER_CREATED",
-  "PAYOUT_INITIATED",
-  "SETTLING",
-  "COMPLETE",
-];
-
 export function resolveNextSendState(event: string, currentState: SendState): SendState | null {
-  const target = EVENT_STATE_MAP[event];
-  if (!target) return null;
-
-  // Terminal states (COMPLETE/FAILED/REFUNDED/SEND_REJECTED) never move again.
-  if (["COMPLETE", "FAILED", "REFUNDED", "SEND_REJECTED"].includes(currentState)) return null;
-
-  if (target === "FAILED" || target === "REFUNDED") return target;
-
-  const currentIndex = STATE_ORDER.indexOf(currentState);
-  const targetIndex = STATE_ORDER.indexOf(target);
-  if (currentIndex === -1 || targetIndex === -1 || targetIndex <= currentIndex) return null;
-
-  return target;
+  return resolveNextSendStateShared(EVENT_STATE_MAP, event, currentState);
 }

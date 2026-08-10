@@ -97,12 +97,16 @@ export const sendsRepo = {
   async updateOrderCreated(
     client: PoolClient,
     id: string,
-    input: { providerOrderId: string; rate: string },
+    input: { providerOrderId: string; rate: string; provider?: string },
   ): Promise<Send> {
+    // provider defaults (via coalesce) to the row's existing value — set
+    // explicitly once selectOfframpProvider actually picks one; the column
+    // itself still defaults to 'paycrest' at the DB level for any row this
+    // is never called with a provider for.
     const { rows } = await client.query(
-      `update sends set state = 'ORDER_CREATED', provider_order_id = $2, rate = $3, updated_at = now()
+      `update sends set state = 'ORDER_CREATED', provider_order_id = $2, rate = $3, provider = coalesce($4, provider), updated_at = now()
        where id = $1 returning *`,
-      [id, input.providerOrderId, input.rate],
+      [id, input.providerOrderId, input.rate, input.provider ?? null],
     );
     return mapSend(rows[0]);
   },
@@ -172,9 +176,14 @@ export const sendsRepo = {
   // Real incident that motivated this: the webhook never reached either
   // environment at all (confirmed via Railway HTTP logs — zero hits ever)
   // while Paycrest's own dashboard showed these same orders as settled.
-  async findAwaitingSettlement(): Promise<Send[]> {
+  // Scoped to one provider — each provider's settlement poller (see
+  // paycrestSettlementPoller.ts / quidaxSettlementPoller.ts) calls its own
+  // provider's getOrderStatus API, which would just error on the other
+  // provider's order IDs, so this must never mix them.
+  async findAwaitingSettlement(provider: string): Promise<Send[]> {
     const { rows } = await pool.query(
-      `select * from sends where state in ('PAYOUT_INITIATED', 'SETTLING') and provider_order_id is not null`,
+      `select * from sends where state in ('PAYOUT_INITIATED', 'SETTLING') and provider_order_id is not null and provider = $1`,
+      [provider],
     );
     return rows.map(mapSend);
   },

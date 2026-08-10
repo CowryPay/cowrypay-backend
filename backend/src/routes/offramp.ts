@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { getInstitutions, getOfframpRate, verifyRecipientAccount } from "../domain/offramp/paycrestAdapter.js";
+import { getInstitutions, verifyRecipientAccount } from "../domain/offramp/paycrestAdapter.js";
+import { getInstitutions as getQuidaxInstitutions } from "../domain/offramp/quidaxAdapter.js";
+import { selectOfframpProvider } from "../domain/offramp/providerSelection.js";
 import { initiateSend } from "../domain/offramp/service.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
 import { formatAmount } from "../utils/format.js";
@@ -16,7 +18,13 @@ const RateQuerySchema = z.object({
   fiatCurrency: z.string().min(1),
 });
 
-// Public — Paycrest's own rate lookup needs no API key either.
+// Public — auto-shops between every eligible off-ramp provider (Quidax only
+// eligible on Base/Solana for USDC — see providerSelection.ts) and returns
+// whichever gives the user more fiat, plus which provider won so the
+// caller knows which institution list (below) and `provider` value to use
+// for the rest of this flow — recipient.institution is a provider-specific
+// bank code, so everything downstream must stay pinned to this same
+// provider (see service.ts's InitiateSendInput.provider comment).
 offrampRouter.get("/offramp/rate", async (req: Request, res: Response) => {
   const parsed = RateQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -24,13 +32,18 @@ offrampRouter.get("/offramp/rate", async (req: Request, res: Response) => {
     return;
   }
   try {
-    const quote = await getOfframpRate(parsed.data);
-    res.json(quote);
+    const selection = await selectOfframpProvider({
+      chain: parsed.data.network,
+      amount: parsed.data.amount,
+      fiatCurrency: parsed.data.fiatCurrency,
+    });
+    const rate = (Number(selection.toAmount) / Number(parsed.data.amount)).toString();
+    res.json({ rate, provider: selection.provider, toAmount: selection.toAmount });
   } catch {
-    // Paycrest's rate-preview endpoint doesn't cover every network (Celo
-    // included) even when real payout liquidity exists there — not a
-    // blocker, the real rate gets locked when a send is actually initiated.
-    // 200, not an error, so callers don't treat a missing preview as fatal.
+    // Neither provider has a live preview for this network/amount combo —
+    // not a blocker, the real rate gets locked when a send is actually
+    // initiated. 200, not an error, so callers don't treat a missing
+    // preview as fatal.
     res.json({
       rate: null,
       note: "A live preview isn't available for this network — you'll see the real rate when you start the send.",
@@ -38,11 +51,19 @@ offrampRouter.get("/offramp/rate", async (req: Request, res: Response) => {
   }
 });
 
-// Public — same as above, no account/API key required to list institutions.
+// Public — no account/API key required to list institutions. `?provider=`
+// picks which provider's bank-code namespace to return (default paycrest,
+// unchanged from before Quidax existed) — pass whichever provider
+// GET /offramp/rate selected, since the code the user picks here must
+// match the provider the send actually uses.
 offrampRouter.get("/offramp/institutions/:currencyCode", async (req: Request, res: Response) => {
+  const provider = req.query.provider === "quidax" ? "quidax" : "paycrest";
   try {
-    const institutions = await getInstitutions(req.params.currencyCode);
-    res.json({ institutions });
+    const institutions =
+      provider === "quidax"
+        ? await getQuidaxInstitutions(req.params.currencyCode)
+        : await getInstitutions(req.params.currencyCode);
+    res.json({ institutions, provider });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -51,12 +72,24 @@ offrampRouter.get("/offramp/institutions/:currencyCode", async (req: Request, re
 const VerifyRecipientSchema = z.object({
   institution: z.string().min(1),
   accountIdentifier: z.string().min(1),
+  provider: z.enum(["paycrest", "quidax"]).optional(),
 });
 
 offrampRouter.post("/offramp/verify-recipient", requireAuth, async (req: Request, res: Response) => {
   const parsed = VerifyRecipientSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+  // Quidax has no name-lookup API — it only confirms a match against the
+  // name given when the order is created (see quidaxAdapter.ts's
+  // createOfframpOrder). A genuine capability gap, not something to fake
+  // a response for.
+  if (parsed.data.provider === "quidax") {
+    res.status(400).json({
+      error:
+        "Quidax doesn't support looking up an account name before sending — collect the recipient's name directly, it'll be verified when the send is confirmed.",
+    });
     return;
   }
   try {
@@ -98,6 +131,11 @@ const CreateSendSchema = z.object({
   // (see domain/offramp/service.ts). Only meaningful once a wallet can
   // hold balance on more than one chain (Phase 7 migration plan).
   chain: z.string().optional(),
+  // Which off-ramp provider to use — must match whichever provider's
+  // institution list `recipient.institution` was picked from (see
+  // GET /offramp/rate and GET /offramp/institutions?provider=). Omitted
+  // means Paycrest, unchanged from before Quidax existed.
+  provider: z.enum(["paycrest", "quidax"]).optional(),
 });
 
 offrampRouter.post("/offramp/sends", requireAuth, async (req: Request, res: Response) => {

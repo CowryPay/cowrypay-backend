@@ -10,8 +10,10 @@ import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
+import { createOfframpOrder as createQuidaxOrder } from "./quidaxAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
+import type { OfframpProvider } from "./providerSelection.js";
 
 // Carried over from a chat draft (domain/chat/remittanceDraft.ts), which
 // already locked a real rate/receive address (against the net amount, after
@@ -36,6 +38,17 @@ export interface InitiateSendInput {
   // meaningful once a wallet can hold balance on more than one chain (see
   // the Phase 7 migration plan) — until then this is always "celo".
   chain?: string;
+  // Which off-ramp provider to actually use — required to be explicit
+  // (not auto-re-decided here) because `recipient.institution` is a
+  // provider-specific bank code (Paycrest's own codes vs Quidax's CBN
+  // codes are different namespaces) that the caller must already have
+  // resolved via the matching provider's institution list. Omitted means
+  // Paycrest — the only provider that existed before this, so every
+  // caller that hasn't been updated to pass this keeps working exactly as
+  // before. See providerSelection.ts for the rate-shopping step callers
+  // are expected to run before this, to actually decide which provider
+  // and institution list to use.
+  provider?: OfframpProvider;
 }
 
 export interface InitiatedSend {
@@ -137,30 +150,48 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     return created;
   });
 
+  // Chat-locked orders (remittanceDraft.ts) are always Paycrest today —
+  // reused as-is, unchanged. A fresh order dispatches to whichever
+  // provider the caller explicitly chose (see InitiateSendInput.provider's
+  // own comment on why this isn't re-decided here).
+  const provider: OfframpProvider = input.provider ?? "paycrest";
   const order =
     reusable ??
-    (await createOfframpOrder({
-      amount: netAmount,
-      token: env.defaultTokenSymbol,
-      network: chain,
-      refundAddress: wallet.address,
-      fiatCurrency: input.fiatCurrency,
-      recipient: input.recipient,
-      reference,
-      rate: input.rate,
-    }));
+    (provider === "quidax"
+      ? await createQuidaxOrder({
+          amount: netAmount,
+          network: chain,
+          fiatCurrency: input.fiatCurrency,
+          recipient: {
+            institution: input.recipient.institution,
+            accountIdentifier: input.recipient.accountIdentifier,
+            accountName: input.recipient.accountName,
+          },
+          reference,
+        })
+      : await createOfframpOrder({
+          amount: netAmount,
+          token: env.defaultTokenSymbol,
+          network: chain,
+          refundAddress: wallet.address,
+          fiatCurrency: input.fiatCurrency,
+          recipient: input.recipient,
+          reference,
+          rate: input.rate,
+        }));
 
   const updated = await withTransaction(async (client) => {
     const next = await sendsRepo.updateOrderCreated(client, send.id, {
       providerOrderId: order.orderId,
       rate: order.rate,
+      provider: reusable ? "paycrest" : provider,
     });
     await sendsRepo.logTransition(
       client,
       send.id,
       "SEND_INSTRUCTED",
       "ORDER_CREATED",
-      reusable ? "reused_chat_locked_order" : "paycrest_order_created",
+      reusable ? "reused_chat_locked_order" : `${provider}_order_created`,
     );
     return next;
   });

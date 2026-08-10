@@ -13,7 +13,7 @@ import { sendsRepo } from "./repository.js";
 // for both a `status` value and a `payment_order.settled` event) so the
 // two paths can never disagree about what a given status means.
 export async function pollPendingSettlements(): Promise<void> {
-  const pending = await sendsRepo.findAwaitingSettlement();
+  const pending = await sendsRepo.findAwaitingSettlement("paycrest");
 
   for (const send of pending) {
     if (!send.providerOrderId) continue; // findAwaitingSettlement already filters this, guarding for TS

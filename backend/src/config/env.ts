@@ -41,6 +41,16 @@ export const env = {
   paycrestApiKey: process.env.PAYCREST_API_KEY,
   paycrestApiSecret: process.env.PAYCREST_API_SECRET,
   paycrestBaseUrl: process.env.PAYCREST_BASE_URL ?? "https://api.paycrest.io/v2",
+  // Second off-ramp provider (Quidax Ramp) — a second-opinion quote for
+  // Base/Solana sends only (the one two of our five chains it supports for
+  // USDC, verified live against their real API, not just their docs — see
+  // domain/offramp/providerSelection.ts). secretKey signs both outbound
+  // requests (x-private-key header) and inbound webhook verification
+  // (HMAC-SHA256 over the raw body, x-ramp-signature header); publicKey is
+  // currently unused server-side (kept for parity/future use).
+  quidaxPublicKey: process.env.QUIDAX_PUBLIC_KEY,
+  quidaxSecretKey: process.env.QUIDAX_SECRET_KEY,
+  quidaxBaseUrl: process.env.QUIDAX_RAMP_BASE_URL ?? "https://ramp-be.quidax.io/api/v1",
   // How long a half-finished multi-turn chat draft (e.g. a partial send
   // request) survives with no reply before the next message starts fresh.
   chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 10),
