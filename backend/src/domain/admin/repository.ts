@@ -51,6 +51,8 @@ export interface AdminMetrics {
     // created_at as a proxy for "when this user was active" (not a
     // separate last-login concept, which doesn't exist in this codebase).
     activeAllTime: number;
+    activeToday: number; // DAU
+    activeLast7Days: number; // WAU
     activeLast30Days: number;
   };
   transactions: {
@@ -181,6 +183,8 @@ export const adminRepo = {
       walletsTotal,
       usersTotal,
       activeAllTime,
+      activeToday,
+      activeLast7Days,
       activeLast30Days,
       sendsTotal,
       sendsSettled,
@@ -202,6 +206,20 @@ export const adminRepo = {
            select user_id from sends where state = 'COMPLETE'
            union
            select user_id from deposits where state = 'BALANCE_CREDITED'
+         ) active_users`,
+      ),
+      pool.query(
+        `select count(distinct user_id)::int as count from (
+           select user_id from sends where state = 'COMPLETE' and created_at >= now() - interval '1 day'
+           union
+           select user_id from deposits where state = 'BALANCE_CREDITED' and created_at >= now() - interval '1 day'
+         ) active_users`,
+      ),
+      pool.query(
+        `select count(distinct user_id)::int as count from (
+           select user_id from sends where state = 'COMPLETE' and created_at >= now() - interval '7 days'
+           union
+           select user_id from deposits where state = 'BALANCE_CREDITED' and created_at >= now() - interval '7 days'
          ) active_users`,
       ),
       pool.query(
@@ -270,6 +288,8 @@ export const adminRepo = {
       users: {
         total: usersTotal.rows[0].count,
         activeAllTime: activeAllTime.rows[0].count,
+        activeToday: activeToday.rows[0].count,
+        activeLast7Days: activeLast7Days.rows[0].count,
         activeLast30Days: activeLast30Days.rows[0].count,
       },
       transactions: {
