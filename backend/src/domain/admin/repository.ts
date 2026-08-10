@@ -98,6 +98,13 @@ export interface AdminSendDiagnostic {
   state: string;
   withdrawTxHash: string | null;
   createdAt: string;
+  provider: string;
+  // How long between creation and actually reaching COMPLETE — the real
+  // question behind "user says it settled in their bank but the app still
+  // shows processing": is our system just slow to find out (webhook/
+  // poller lag), or genuinely stuck? Null if not yet COMPLETE.
+  completedAt: string | null;
+  settlementTrigger: string | null;
   // The most recent transition whose trigger mentions the fee sweep
   // (offramp/service.ts logs "fee_swept:<hash>" or
   // "fee_sweep_failed: <error>") — null means the fee-sweep step was never
@@ -373,13 +380,23 @@ export const adminRepo = {
   // from the main payout).
   async listRecentSends(chain: string | undefined, limit: number): Promise<AdminSendDiagnostic[]> {
     const { rows } = await pool.query(
-      `select s.id, s.chain, s.amount_human, s.fee_amount, s.treasury_address, s.state,
+      `select s.id, s.chain, s.provider, s.amount_human, s.fee_amount, s.treasury_address, s.state,
               s.withdraw_tx_hash, s.created_at,
               (
                 select t.trigger from send_state_transitions t
                 where t.send_id = s.id and t.trigger like 'fee_swe%'
                 order by t.created_at desc limit 1
-              ) as fee_sweep_trigger
+              ) as fee_sweep_trigger,
+              (
+                select t.created_at from send_state_transitions t
+                where t.send_id = s.id and t.to_state = 'COMPLETE'
+                order by t.created_at desc limit 1
+              ) as completed_at,
+              (
+                select t.trigger from send_state_transitions t
+                where t.send_id = s.id and t.to_state = 'COMPLETE'
+                order by t.created_at desc limit 1
+              ) as settlement_trigger
        from sends s
        where ($1::text is null or s.chain = $1)
        order by s.created_at desc
@@ -389,11 +406,14 @@ export const adminRepo = {
     return rows.map((r) => ({
       id: r.id,
       chain: r.chain,
+      provider: r.provider,
       amountHuman: r.amount_human,
       feeAmount: r.fee_amount,
       treasuryAddress: r.treasury_address,
       state: r.state,
       withdrawTxHash: r.withdraw_tx_hash,
+      completedAt: r.completed_at,
+      settlementTrigger: r.settlement_trigger,
       createdAt: r.created_at,
       feeSweepTrigger: r.fee_sweep_trigger,
     }));
