@@ -118,6 +118,10 @@ const ExistingOrderSchema = z.object({
   reference: z.string().min(1),
   feeAmount: z.string().min(1),
   treasuryAddress: z.string().min(1),
+  // Which provider this chat-locked order was actually created with —
+  // required now that remittanceDraft.ts can lock either provider, not
+  // just Paycrest (see service.ts's LockedOrder for why this matters).
+  provider: z.enum(["paycrest", "quidax"]),
 });
 
 const CreateSendSchema = z.object({

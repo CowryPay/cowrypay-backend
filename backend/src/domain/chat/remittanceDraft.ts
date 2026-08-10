@@ -15,6 +15,8 @@ import {
   NoLiquidityProviderError,
   type Institution,
 } from "../offramp/paycrestAdapter.js";
+import { getInstitutions as getQuidaxInstitutions, createOfframpOrder as createQuidaxOrder } from "../offramp/quidaxAdapter.js";
+import { selectOfframpProvider, isQuidaxEligible, type OfframpProvider } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -37,6 +39,11 @@ export interface RemittanceDraft {
   receiveAddress: string;
   validUntil: string;
   chain: string;
+  // Which provider actually locked this rate — POST /offramp/sends' reuse
+  // path needs this (see service.ts's LockedOrder), and the frontend should
+  // show it somewhere (confirm card / receipt) per Roberto's own note on
+  // why this field exists.
+  provider: OfframpProvider;
 }
 
 export type RemittanceResolution =
@@ -149,25 +156,95 @@ async function finalizeRemittanceDraft(
   const { feeAmount, netAmount } = computeFeeSplit(amountStr);
   const reference = randomUUID();
 
+  // Quidax is only ever used here if the SAME bank can be confidently
+  // found on its own institution list — recipient.institution above was
+  // already resolved as a Paycrest bank code, and Paycrest's/Quidax's
+  // codes are different namespaces for the same real-world bank. Reusing
+  // Paycrest's code on a Quidax order (or vice versa) would silently
+  // misroute the payout, so this only switches provider when a single,
+  // unambiguous name match exists; any other outcome (not eligible, no
+  // match, lookup failure) falls straight back to Paycrest, unchanged
+  // from before Quidax existed.
+  let provider: OfframpProvider = "paycrest";
+  // Starts as the original (Paycrest-coded) recipient; only ever replaced
+  // with a Quidax-coded version once a confident single match is found —
+  // this is what actually gets sent to whichever provider AND stored on
+  // the resulting `send` row, so it must never end up mixing one
+  // provider's institution code with the other's order.
+  let finalRecipient: SendRecipient = recipient;
+  let quidaxRecipient: { institution: string; accountIdentifier: string; accountName: string } | null = null;
+
+  if (isQuidaxEligible(chain)) {
+    try {
+      const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
+      if (selection.provider === "quidax") {
+        const quidaxInstitutions = await getQuidaxInstitutions(fiatCurrency);
+        const matches = findInstitutionMatches(recipient.institutionName ?? recipient.institution, quidaxInstitutions);
+        if (matches.length === 1) {
+          const matched = matches[0]!;
+          provider = "quidax";
+          finalRecipient = { ...recipient, institution: matched.code, institutionName: matched.name };
+          quidaxRecipient = {
+            institution: matched.code,
+            accountIdentifier: recipient.accountIdentifier,
+            accountName: recipient.accountName,
+          };
+        }
+      }
+    } catch {
+      // Quidax unavailable this round (rate lookup or institution list
+      // failed) — fall back to Paycrest below, same as always.
+    }
+  }
+
   let order;
   try {
-    order = await createOfframpOrder({
-      amount: netAmount,
-      token: env.defaultTokenSymbol,
-      network: chain,
-      refundAddress: wallet.address,
-      fiatCurrency,
-      recipient,
-      reference,
-    });
+    order =
+      provider === "quidax" && quidaxRecipient
+        ? await createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: quidaxRecipient, reference })
+        : await createOfframpOrder({
+            amount: netAmount,
+            token: env.defaultTokenSymbol,
+            network: chain,
+            refundAddress: wallet.address,
+            fiatCurrency,
+            recipient,
+            reference,
+          });
   } catch (err) {
-    if (err instanceof NoLiquidityProviderError) {
+    // Quidax order creation itself failed (e.g. a name-match rejection at
+    // its bank-account-attach step) — the user can still send via
+    // Paycrest, so retry there once before actually giving up.
+    if (provider === "quidax") {
+      try {
+        provider = "paycrest";
+        finalRecipient = recipient; // undo the Quidax-coded recipient, back to Paycrest's own coding
+        order = await createOfframpOrder({
+          amount: netAmount,
+          token: env.defaultTokenSymbol,
+          network: chain,
+          refundAddress: wallet.address,
+          fiatCurrency,
+          recipient,
+          reference,
+        });
+      } catch (fallbackErr) {
+        if (fallbackErr instanceof NoLiquidityProviderError) {
+          return { ok: false, message: fallbackErr.message };
+        }
+        return {
+          ok: false,
+          message: `Couldn't lock a rate for that right now (${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}). Try again in a moment.`,
+        };
+      }
+    } else if (err instanceof NoLiquidityProviderError) {
       return { ok: false, message: err.message };
+    } else {
+      return {
+        ok: false,
+        message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,
+      };
     }
-    return {
-      ok: false,
-      message: `Couldn't lock a rate for that right now (${err instanceof Error ? err.message : String(err)}). Try again in a moment.`,
-    };
   }
 
   const payout = Number(netAmount) * Number(order.rate);
@@ -183,13 +260,14 @@ async function finalizeRemittanceDraft(
       netAmount,
       treasuryAddress,
       fiatCurrency,
-      recipient,
+      recipient: finalRecipient,
       rate: order.rate,
       reference,
       orderId: order.orderId,
       receiveAddress: order.receiveAddress,
       validUntil: order.validUntil,
       chain,
+      provider,
     },
     summary: `Ready to send $${amountStr} to ${recipient.accountName}${fiatCountryLabel}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
   };

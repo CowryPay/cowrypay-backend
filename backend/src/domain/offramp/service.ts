@@ -23,6 +23,10 @@ export interface LockedOrder extends CreatedOrder {
   reference: string;
   feeAmount: string;
   treasuryAddress: string;
+  // Which provider actually created this locked order — required now that
+  // remittanceDraft.ts can lock either provider, not assumed to be Paycrest
+  // the way it safely could be before (see the reuse fix below).
+  provider: OfframpProvider;
 }
 
 export interface InitiateSendInput {
@@ -150,11 +154,12 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     return created;
   });
 
-  // Chat-locked orders (remittanceDraft.ts) are always Paycrest today —
-  // reused as-is, unchanged. A fresh order dispatches to whichever
-  // provider the caller explicitly chose (see InitiateSendInput.provider's
-  // own comment on why this isn't re-decided here).
-  const provider: OfframpProvider = input.provider ?? "paycrest";
+  // A reused chat-locked order already carries the provider it was
+  // actually created with (remittanceDraft.ts can lock either provider) —
+  // a fresh order dispatches to whichever provider the caller explicitly
+  // chose (see InitiateSendInput.provider's own comment on why this isn't
+  // re-decided here).
+  const provider: OfframpProvider = reusable?.provider ?? input.provider ?? "paycrest";
   const order =
     reusable ??
     (provider === "quidax"
@@ -184,7 +189,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     const next = await sendsRepo.updateOrderCreated(client, send.id, {
       providerOrderId: order.orderId,
       rate: order.rate,
-      provider: reusable ? "paycrest" : provider,
+      provider,
     });
     await sendsRepo.logTransition(
       client,
