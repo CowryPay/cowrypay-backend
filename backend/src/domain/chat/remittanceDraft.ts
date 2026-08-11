@@ -211,6 +211,22 @@ async function finalizeRemittanceDraft(
     }
   }
 
+  // Real gap this closes: `provider` defaults to "paycrest" whenever no
+  // alt provider won OR the winning alt provider's bank couldn't be
+  // confidently cross-matched — but for a chain Paycrest doesn't support
+  // at all (Optimism/Solana/Stellar, see paycrestAdapter.ts), that default
+  // was never actually valid, and createOrderForProvider below would have
+  // attempted it anyway and failed with Paycrest's own confusing raw
+  // error, before the fallback-retry logic even got a chance to run
+  // (that logic only handles the CHOSEN provider's order creation
+  // failing, not "the default was never valid to begin with").
+  if (provider === "paycrest" && !isPaycrestEligible(chain)) {
+    return {
+      ok: false,
+      message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
+    };
+  }
+
   async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {
     if (p === "quidax" && altRecipient) {
       return createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: altRecipient, reference });
