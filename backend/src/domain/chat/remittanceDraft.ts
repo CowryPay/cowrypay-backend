@@ -190,10 +190,12 @@ async function finalizeRemittanceDraft(
   if (isQuidaxEligible(chain) || isCentiivEligible(chain)) {
     try {
       const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
+      console.log(`[remittance-draft] provider selection for ${chain}: ${selection.provider} (toAmount=${selection.toAmount})`);
       if (selection.provider === "quidax" || selection.provider === "centiiv") {
         const altInstitutions =
           selection.provider === "quidax" ? await getQuidaxInstitutions(fiatCurrency) : await getCentiivInstitutions();
-        const matches = findInstitutionMatches(recipient.institutionName ?? recipient.institution, altInstitutions);
+        const searchTerm = recipient.institutionName ?? recipient.institution;
+        const matches = findInstitutionMatches(searchTerm, altInstitutions);
         if (matches.length === 1) {
           const matched = matches[0]!;
           provider = selection.provider;
@@ -203,11 +205,19 @@ async function finalizeRemittanceDraft(
             accountIdentifier: recipient.accountIdentifier,
             accountName: recipient.accountName,
           };
+        } else {
+          // Logged loudly, not silently — this is exactly the kind of gap
+          // that produced a confusing "not available" message with zero
+          // diagnostic trail the first time this was reported.
+          console.log(
+            `[remittance-draft] ${selection.provider} won the rate for ${chain} but institution cross-match found ${matches.length} matches for "${searchTerm}" (need exactly 1) — falling back to paycrest, which isn't eligible for ${chain} either.`,
+          );
         }
       }
-    } catch {
+    } catch (err) {
       // Alt provider unavailable this round (rate lookup or institution
       // list failed) — fall back to Paycrest below, same as always.
+      console.log(`[remittance-draft] alt provider lookup failed for ${chain}:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -221,6 +231,7 @@ async function finalizeRemittanceDraft(
   // (that logic only handles the CHOSEN provider's order creation
   // failing, not "the default was never valid to begin with").
   if (provider === "paycrest" && !isPaycrestEligible(chain)) {
+    console.log(`[remittance-draft] no eligible provider for ${chain} after selection — defaulted to paycrest, which isn't eligible.`);
     return {
       ok: false,
       message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
@@ -277,7 +288,12 @@ async function finalizeRemittanceDraft(
     } else if (provider !== "paycrest") {
       // The alt provider failed and Paycrest was never a real option for
       // this chain — an honest, non-technical message instead of either
-      // provider's raw error text.
+      // provider's raw error text. Logged loudly since this message alone
+      // gives no diagnostic trail otherwise.
+      console.log(
+        `[remittance-draft] ${provider} order creation failed for ${chain}, no fallback available:`,
+        err instanceof Error ? err.message : err,
+      );
       return {
         ok: false,
         message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
