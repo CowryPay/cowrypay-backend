@@ -128,7 +128,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // net amount Paycrest's order was created with (LockedOrder doesn't carry
   // it directly) as long as the fee bps hasn't changed mid-quote-window.
   const { feeAmount, netAmount } = computeFeeSplit(input.amount);
-  const treasuryAddress = reusable?.treasuryAddress ?? requireTreasuryAddress();
+  const treasuryAddress = reusable?.treasuryAddress ?? (await requireTreasuryAddress(chain));
 
   const send = await withTransaction(async (client) => {
     // Atomic decrement-with-guard (see ledgerRepo.debitAvailable) — two

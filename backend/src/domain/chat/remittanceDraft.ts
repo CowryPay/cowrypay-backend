@@ -112,13 +112,6 @@ async function finalizeRemittanceDraft(
   recipient: SendRecipient,
   chainHint?: string,
 ): Promise<RemittanceResolution> {
-  let treasuryAddress: string;
-  try {
-    treasuryAddress = requireTreasuryAddress();
-  } catch (err) {
-    return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
-  }
-
   const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
   const walletAddress = wallet.address;
@@ -153,6 +146,17 @@ async function finalizeRemittanceDraft(
     return { ok: false, message: `Which chain would you like to send from? You have balance on: ${list}.` };
   } else {
     chain = fundedChains[0]?.chain ?? wallet.chain;
+  }
+
+  // Moved here (after chain is known) rather than resolved eagerly at the
+  // top of this function — requireTreasuryAddress is chain-aware now (see
+  // fee.ts's own comment on why: Stellar/Solana each need their own real
+  // treasury address, not the single EVM one).
+  let treasuryAddress: string;
+  try {
+    treasuryAddress = await requireTreasuryAddress(chain);
+  } catch (err) {
+    return { ok: false, message: `Sends aren't available right now (${err instanceof Error ? err.message : String(err)}).` };
   }
 
   const amountStr = String(amount);
