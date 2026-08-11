@@ -1,28 +1,15 @@
 import { getOfframpRate as getPaycrestRate } from "./paycrestAdapter.js";
 import { getOfframpRate as getQuidaxRate, quidaxNetworkFor } from "./quidaxAdapter.js";
-import { centiivNetworkFor } from "./centiivAdapter.js";
+import { getOfframpRate as getCentiivRate, centiivNetworkFor } from "./centiivAdapter.js";
 
-// "centiiv" is a real, valid value here (dispatchable via
-// InitiateSendInput.provider) but deliberately never returned by
-// selectOfframpProvider below — Centiiv gives no rate until after a real
-// order is created and the deposit settles (see centiivAdapter.ts), so
-// there's nothing to compare against Paycrest/Quidax's upfront quotes.
-// Explicit-only by design, not an oversight.
 export type OfframpProvider = "paycrest" | "quidax" | "centiiv";
-
-// Not used by selectOfframpProvider (Centiiv is explicit-only, see above)
-// — exported for callers that need to check chain eligibility before
-// offering Centiiv as a manual choice.
-export function isCentiivEligible(chain: string): boolean {
-  return centiivNetworkFor(chain) !== null;
-}
 
 export interface ProviderQuote {
   provider: OfframpProvider;
   // "How much fiat the user actually receives" — the one number that's
   // genuinely comparable across providers, regardless of how each
-  // represents rate/fee internally (Paycrest: a rate multiplier; Quidax: a
-  // fee-inclusive to_amount straight from their quote).
+  // represents rate/fee internally (Paycrest: a rate multiplier; Quidax/
+  // Centiiv: a fee-inclusive amount straight from their own quote).
   toAmount: string;
 }
 
@@ -33,11 +20,17 @@ export function isQuidaxEligible(chain: string): boolean {
   return quidaxNetworkFor(chain) !== null;
 }
 
+// Centiiv supports 3 of our 5 chains (Stellar/Solana/Base — verified live
+// against their real API, see centiivAdapter.ts's own comment on this).
+export function isCentiivEligible(chain: string): boolean {
+  return centiivNetworkFor(chain) !== null;
+}
+
 // Queries every eligible provider in parallel and returns whichever gives
 // the user more fiat. A provider erroring out (rate-limited, momentarily
 // down, amount too small for their liquidity) is treated as "not
-// available this round," not a hard failure — the other provider still
-// gets a chance to fill the order. Only throws when neither can.
+// available this round," not a hard failure — the others still get a
+// chance to fill the order. Only throws when none can.
 export async function selectOfframpProvider(params: {
   chain: string;
   amount: string;
@@ -58,12 +51,18 @@ export async function selectOfframpProvider(params: {
         .catch(() => null)
     : Promise.resolve(null);
 
-  const [paycrest, quidax] = await Promise.all([paycrestPromise, quidaxPromise]);
+  const centiivPromise: Promise<ProviderQuote | null> = isCentiivEligible(params.chain)
+    ? getCentiivRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
+        .then((q) => ({ provider: "centiiv" as const, toAmount: q.estimatedReceivableAmount }))
+        .catch(() => null)
+    : Promise.resolve(null);
 
-  if (!paycrest && !quidax) {
+  const quotes = (await Promise.all([paycrestPromise, quidaxPromise, centiivPromise])).filter(
+    (q): q is ProviderQuote => q !== null,
+  );
+
+  if (quotes.length === 0) {
     throw new Error("No off-ramp provider is available for this amount/chain right now");
   }
-  if (!paycrest) return quidax as ProviderQuote;
-  if (!quidax) return paycrest;
-  return Number(quidax.toAmount) > Number(paycrest.toAmount) ? quidax : paycrest;
+  return quotes.reduce((best, q) => (Number(q.toAmount) > Number(best.toAmount) ? q : best));
 }

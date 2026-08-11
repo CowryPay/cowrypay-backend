@@ -14,9 +14,11 @@ import {
   verifyRecipientAccount,
   NoLiquidityProviderError,
   type Institution,
+  type CreatedOrder,
 } from "../offramp/paycrestAdapter.js";
 import { getInstitutions as getQuidaxInstitutions, createOfframpOrder as createQuidaxOrder } from "../offramp/quidaxAdapter.js";
-import { selectOfframpProvider, isQuidaxEligible, type OfframpProvider } from "../offramp/providerSelection.js";
+import { getInstitutions as getCentiivInstitutions, createOfframpOrder as createCentiivOrder } from "../offramp/centiivAdapter.js";
+import { selectOfframpProvider, isQuidaxEligible, isCentiivEligible, type OfframpProvider } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -119,6 +121,7 @@ async function finalizeRemittanceDraft(
 
   const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
+  const walletAddress = wallet.address;
 
   // Balance is tracked per chain (USDC on one chain isn't spendable on
   // another) — resolve which chain this send draws from before locking a
@@ -158,33 +161,34 @@ async function finalizeRemittanceDraft(
 
   // Quidax is only ever used here if the SAME bank can be confidently
   // found on its own institution list — recipient.institution above was
-  // already resolved as a Paycrest bank code, and Paycrest's/Quidax's
-  // codes are different namespaces for the same real-world bank. Reusing
-  // Paycrest's code on a Quidax order (or vice versa) would silently
-  // misroute the payout, so this only switches provider when a single,
-  // unambiguous name match exists; any other outcome (not eligible, no
-  // match, lookup failure) falls straight back to Paycrest, unchanged
-  // from before Quidax existed.
+  // already resolved as a Paycrest bank code, and each provider's bank
+  // codes are a different namespace for the same real-world bank. Reusing
+  // Paycrest's code on a Quidax/Centiiv order (or vice versa) would
+  // silently misroute the payout, so this only switches provider when a
+  // single, unambiguous name match exists on THAT provider's own list;
+  // any other outcome (not eligible, no match, lookup failure) falls
+  // straight back to Paycrest, unchanged from before either existed.
   let provider: OfframpProvider = "paycrest";
   // Starts as the original (Paycrest-coded) recipient; only ever replaced
-  // with a Quidax-coded version once a confident single match is found —
-  // this is what actually gets sent to whichever provider AND stored on
-  // the resulting `send` row, so it must never end up mixing one
-  // provider's institution code with the other's order.
+  // with an alt-provider-coded version once a confident single match is
+  // found — this is what actually gets sent to whichever provider AND
+  // stored on the resulting `send` row, so it must never end up mixing
+  // one provider's institution code with another's order.
   let finalRecipient: SendRecipient = recipient;
-  let quidaxRecipient: { institution: string; accountIdentifier: string; accountName: string } | null = null;
+  let altRecipient: { institution: string; accountIdentifier: string; accountName: string } | null = null;
 
-  if (isQuidaxEligible(chain)) {
+  if (isQuidaxEligible(chain) || isCentiivEligible(chain)) {
     try {
       const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
-      if (selection.provider === "quidax") {
-        const quidaxInstitutions = await getQuidaxInstitutions(fiatCurrency);
-        const matches = findInstitutionMatches(recipient.institutionName ?? recipient.institution, quidaxInstitutions);
+      if (selection.provider === "quidax" || selection.provider === "centiiv") {
+        const altInstitutions =
+          selection.provider === "quidax" ? await getQuidaxInstitutions(fiatCurrency) : await getCentiivInstitutions();
+        const matches = findInstitutionMatches(recipient.institutionName ?? recipient.institution, altInstitutions);
         if (matches.length === 1) {
           const matched = matches[0]!;
-          provider = "quidax";
+          provider = selection.provider;
           finalRecipient = { ...recipient, institution: matched.code, institutionName: matched.name };
-          quidaxRecipient = {
+          altRecipient = {
             institution: matched.code,
             accountIdentifier: recipient.accountIdentifier,
             accountName: recipient.accountName,
@@ -192,42 +196,42 @@ async function finalizeRemittanceDraft(
         }
       }
     } catch {
-      // Quidax unavailable this round (rate lookup or institution list
-      // failed) — fall back to Paycrest below, same as always.
+      // Alt provider unavailable this round (rate lookup or institution
+      // list failed) — fall back to Paycrest below, same as always.
     }
+  }
+
+  async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {
+    if (p === "quidax" && altRecipient) {
+      return createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: altRecipient, reference });
+    }
+    if (p === "centiiv" && altRecipient) {
+      return createCentiivOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: altRecipient, reference });
+    }
+    return createOfframpOrder({
+      amount: netAmount,
+      token: env.defaultTokenSymbol,
+      network: chain,
+      refundAddress: walletAddress,
+      fiatCurrency,
+      recipient,
+      reference,
+    });
   }
 
   let order;
   try {
-    order =
-      provider === "quidax" && quidaxRecipient
-        ? await createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: quidaxRecipient, reference })
-        : await createOfframpOrder({
-            amount: netAmount,
-            token: env.defaultTokenSymbol,
-            network: chain,
-            refundAddress: wallet.address,
-            fiatCurrency,
-            recipient,
-            reference,
-          });
+    order = await createOrderForProvider(provider);
   } catch (err) {
-    // Quidax order creation itself failed (e.g. a name-match rejection at
-    // its bank-account-attach step) — the user can still send via
-    // Paycrest, so retry there once before actually giving up.
-    if (provider === "quidax") {
+    // The chosen alt provider's order creation itself failed (e.g. a
+    // name-match rejection at Quidax's bank-account-attach step, or
+    // Centiiv's own live bank-account verification) — the user can still
+    // send via Paycrest, so retry there once before actually giving up.
+    if (provider !== "paycrest") {
       try {
         provider = "paycrest";
-        finalRecipient = recipient; // undo the Quidax-coded recipient, back to Paycrest's own coding
-        order = await createOfframpOrder({
-          amount: netAmount,
-          token: env.defaultTokenSymbol,
-          network: chain,
-          refundAddress: wallet.address,
-          fiatCurrency,
-          recipient,
-          reference,
-        });
+        finalRecipient = recipient; // undo the alt-provider-coded recipient, back to Paycrest's own coding
+        order = await createOrderForProvider("paycrest");
       } catch (fallbackErr) {
         if (fallbackErr instanceof NoLiquidityProviderError) {
           return { ok: false, message: fallbackErr.message };

@@ -1,14 +1,18 @@
 import { env } from "../../config/env.js";
 
-// Verified live against the real API (2026-08-11), not their docs site —
-// docs.centiiv.io and centiiv.io both blocked/redirected every automated
-// fetch attempted (a client-side-routed app that served the same fallback
-// page regardless of URL requested). Every fact below came from live
-// requests against api.centiiv.io using real credentials, the same
-// discipline applied to Quidax earlier — including one real, live
-// (unfunded, since-expired) mainnet order actually created to see the
-// true response shape rather than guess field names for something this
-// money-critical.
+// Verified live against the real API (2026-08-11), not guessed — every
+// fact below came from live requests against api.centiiv.io using real
+// credentials, the same discipline applied to Quidax earlier, including
+// one real, live (unfunded, since-expired) mainnet order actually created
+// to see the true response shape rather than guess field names for
+// something this money-critical. docs.centiiv.io (the custom domain)
+// blocked/redirected every automated fetch attempted; the underlying
+// readme.io project (c-vmch.readme.io) worked fine once found — that's
+// where POST /public/quote (see getOfframpRate below) turned up, after a
+// dozen guessed route variants missed it entirely. Lesson: a blocked docs
+// site isn't proof an endpoint doesn't exist, only that it wasn't found
+// yet — worth remembering before declaring a capability gap on any future
+// provider integration too.
 //
 // Only STELLAR, SOLANA, and BASE are eligible among our five chains —
 // OPTIMISM appears in Centiiv's network enum but has no real USDC->NGN
@@ -60,6 +64,43 @@ export async function getInstitutions(): Promise<Institution[]> {
   return res.data.map((b) => ({ code: b.code, name: b.name, type: "bank" }));
 }
 
+export interface RateQuote {
+  rate: string;
+  estimatedReceivableAmount: string;
+  fees: string;
+}
+
+// POST /public/quote — found via the user directly pointing to Centiiv's
+// real docs URL (c-vmch.readme.io) after docs.centiiv.io itself blocked
+// every automated fetch attempted, including a dozen guessed route
+// variants for this exact endpoint. Confirmed live: real rate, e.g. 10
+// USDC -> NGN on Solana quoted at rate "1357.735", fees "0". This is a
+// PREVIEW only — the order's own metadata.rate (see CreatedOrder /
+// centiivSettlementPoller.ts) is the real, final settled rate, which can
+// differ slightly if the market moves between this quote and the crypto
+// actually arriving.
+export async function getOfframpRate(params: {
+  network: string;
+  amount: string;
+  fiatCurrency: string;
+}): Promise<RateQuote> {
+  const network = centiivNetworkFor(params.network);
+  if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${params.network} for USDC`);
+  const result = await centiivFetch<{ rate: string; estimatedReceivableAmount: string; fees: string }>(
+    "/public/quote",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        fromAsset: "USDC",
+        toAsset: params.fiatCurrency.toUpperCase(),
+        amount: Number(params.amount),
+        network,
+      }),
+    },
+  );
+  return { rate: result.rate, estimatedReceivableAmount: result.estimatedReceivableAmount, fees: result.fees };
+}
+
 export interface OfframpRecipient {
   institution: string; // Centiiv bank code (e.g. "090267"), not Paycrest's or Quidax's
   accountIdentifier: string;
@@ -78,12 +119,11 @@ export interface CreatedOrder {
   orderId: string;
   receiveAddress: string;
   validUntil: string;
-  // "0" at creation, always — Centiiv gives no rate until settlement
-  // actually happens (confirmed: metadata.rate comes back null on a real
-  // live order, and no quote/rate endpoint exists despite being
-  // referenced in their docs' page-slug index — searched a dozen route
-  // variants, none exist). centiivSettlementPoller.ts fills in the real
-  // rate once Centiiv reveals it, updating this same send row later.
+  // A real quote fetched at creation time (see getOfframpRate above), NOT
+  // the order's own metadata.rate — that stays null until real settlement
+  // happens, confirmed live, and can end up slightly different from this
+  // quote if the market moves in between. This is a preview, same caveat
+  // as Paycrest/Quidax's own rate-at-creation-time numbers.
   rate: string;
 }
 
@@ -95,6 +135,8 @@ export interface CreatedOrder {
 export async function createOfframpOrder(input: CreateOrderInput): Promise<CreatedOrder> {
   const network = centiivNetworkFor(input.network);
   if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${input.network} for USDC`);
+
+  const quote = await getOfframpRate({ network: input.network, amount: input.amount, fiatCurrency: input.fiatCurrency });
 
   const result = await centiivFetch<{
     id: string;
@@ -117,7 +159,7 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
     orderId: result.id,
     receiveAddress: result.temporaryWallet.publicAddress,
     validUntil: result.temporaryWallet.expiresAt,
-    rate: "0",
+    rate: quote.rate,
   };
 }
 
