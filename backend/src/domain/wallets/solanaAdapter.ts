@@ -1,7 +1,6 @@
 import {
   address as toAddress,
   createSolanaRpc,
-  createSolanaRpcSubscriptions,
   pipe,
   createTransactionMessage,
   setTransactionMessageFeePayerSigner,
@@ -9,10 +8,11 @@ import {
   appendTransactionMessageInstructions,
   signTransactionMessageWithSigners,
   getSignatureFromTransaction,
-  sendAndConfirmTransactionFactory,
+  sendTransactionWithoutConfirmingFactory,
   lamports,
   isSolanaError,
   SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+  type Signature,
 } from "@solana/kit";
 import { getTransferSolInstruction } from "@solana-program/system";
 import {
@@ -57,21 +57,66 @@ function parseUsdcAmountToBaseUnits(amount: string): bigint {
   return BigInt(whole || "0") * 10n ** BigInt(USDC_DECIMALS) + BigInt(paddedFrac || "0");
 }
 
-function rpcClients() {
-  const rpc = createSolanaRpc(env.solanaRpcUrl);
-  const wsUrl = env.solanaRpcUrl.replace(/^http/, "ws");
-  const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
-  return { rpc, rpcSubscriptions };
+function rpcClient() {
+  return createSolanaRpc(env.solanaRpcUrl);
+}
+
+const CONFIRM_POLL_INTERVAL_MS = 2_000;
+const CONFIRM_REBROADCAST_INTERVAL_MS = 5_000;
+
+// HTTP-only replacement for @solana/kit's sendAndConfirmTransactionFactory.
+// That factory confirms via a WebSocket signatureSubscribe push, which
+// returns a hard "-32601 Method not found" against our Alchemy endpoint in
+// production (reproduced directly against the raw WS URL — an Alchemy
+// app/account-level gap, not something fixable from our code). HTTP RPC
+// calls against the same endpoint have been reliable all session, so this
+// polls getSignatureStatuses instead of subscribing, rebroadcasting the
+// transaction periodically in case the original send was dropped — the
+// same "don't let a single naive send risk a silently-lost transfer"
+// property the factory provided, just over HTTP.
+async function confirmByPolling(
+  rpc: ReturnType<typeof createSolanaRpc>,
+  signature: Signature,
+  lastValidBlockHeight: bigint,
+  rebroadcast: () => Promise<void>,
+): Promise<void> {
+  let lastBroadcastAt = 0;
+  for (;;) {
+    const now = Date.now();
+    if (now - lastBroadcastAt >= CONFIRM_REBROADCAST_INTERVAL_MS) {
+      await rebroadcast().catch(() => {}); // already-landed txs just no-op on resend
+      lastBroadcastAt = now;
+    }
+
+    const {
+      value: [status],
+    } = await rpc.getSignatureStatuses([signature]).send();
+    if (status) {
+      if (status.err) {
+        throw new Error(`Solana transaction failed: ${JSON.stringify(status.err)}`);
+      }
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return;
+      }
+    }
+
+    const blockHeight = await rpc.getBlockHeight().send();
+    if (blockHeight > lastValidBlockHeight) {
+      throw new Error("Solana transaction expired before confirmation (blockhash no longer valid)");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, CONFIRM_POLL_INTERVAL_MS));
+  }
 }
 
 // Solana transactions can be silently dropped and become permanently
 // unlandable once their blockhash expires (~60-90s) — a materially
 // different failure mode from EVM's nonce-based retries or Stellar's
-// synchronous submit. sendAndConfirmTransactionFactory rebroadcasts on an
-// interval until either confirmed or the blockhash expires, instead of a
-// single naive send — using a bare send here would risk exactly the "money
-// left the treasury, transaction never landed, no error surfaced" bug
-// class this is meant to avoid.
+// synchronous submit. confirmByPolling rebroadcasts on an interval until
+// either confirmed or the blockhash expires, instead of a single naive
+// send — using a bare send here would risk exactly the "money left the
+// treasury, transaction never landed, no error surfaced" bug class this is
+// meant to avoid.
 // Exported for solanaDepositSweeper.ts's reuse — building/signing/sending a
 // Solana transaction with the blockhash-expiry-safe send helper is exactly
 // the same mechanics whether the fee payer is the treasury or a user's own
@@ -80,8 +125,7 @@ export async function signAndSendTransaction(
   feePayer: Awaited<ReturnType<typeof getSolanaTreasurySigner>>,
   instructions: readonly unknown[],
 ): Promise<string> {
-  const { rpc, rpcSubscriptions } = rpcClients();
-  const sendAndConfirm = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions } as never);
+  const rpc = rpcClient();
   const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
 
   const message = pipe(
@@ -91,13 +135,18 @@ export async function signAndSendTransaction(
     (m) => appendTransactionMessageInstructions(instructions as never, m),
   );
   const signedTx = await signTransactionMessageWithSigners(message);
-  // Kit's pipe-based builder can't narrow the transaction's lifetime type
-  // down to specifically "blockhash lifetime" without much more verbose
-  // generic annotations on every step above — it genuinely has one here
-  // (setTransactionMessageLifetimeUsingBlockhash was used, not a durable
-  // nonce), so this cast reflects a real runtime guarantee, not a bypass.
-  await sendAndConfirm(signedTx as never, { commitment: "confirmed" });
-  return getSignatureFromTransaction(signedTx);
+  const signature = getSignatureFromTransaction(signedTx);
+
+  const sendWithoutConfirming = sendTransactionWithoutConfirmingFactory({ rpc });
+  await confirmByPolling(rpc, signature, latestBlockhash.lastValidBlockHeight, () =>
+    // Kit's pipe-based builder can't narrow the transaction's lifetime type
+    // down to specifically "blockhash lifetime" without much more verbose
+    // generic annotations on every step above — it genuinely has one here
+    // (setTransactionMessageLifetimeUsingBlockhash was used, not a durable
+    // nonce), so this cast reflects a real runtime guarantee, not a bypass.
+    sendWithoutConfirming(signedTx as never, { commitment: "confirmed" }),
+  );
+  return signature;
 }
 
 // Best-effort — never blocks or fails wallet creation. Keeps the existing
