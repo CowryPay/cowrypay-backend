@@ -73,6 +73,13 @@ export const env = {
   // domain/offramp/fee.ts, not here.
   remittanceTreasuryAddress: process.env.REMITTANCE_TREASURY_ADDRESS,
   remittanceFeeBps: Number(process.env.REMITTANCE_FEE_BPS ?? 100),
+  // Dedicated fee-only treasury addresses for Stellar/Solana — deliberately
+  // separate from those chains' own shared deposit/operational treasury
+  // (STELLAR_DEPOSIT_ADDRESS, the Solana treasury signer), mirroring how
+  // REMITTANCE_TREASURY_ADDRESS above is already its own address distinct
+  // from the EVM payout wallet. Checked lazily by domain/offramp/fee.ts.
+  stellarTreasuryFeeAddress: process.env.STELLAR_TREASURY_FEE_ADDRESS,
+  solanaTreasuryFeeAddress: process.env.SOLANA_TREASURY_FEE_ADDRESS,
   // Any secret string — a 32-byte encryption key gets derived from it via
   // scrypt, so this doesn't need to be exact raw key bytes. Only required
   // when a recipient is actually saved — checked lazily, not here.

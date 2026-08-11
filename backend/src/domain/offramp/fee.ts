@@ -1,5 +1,4 @@
 import { env } from "../../config/env.js";
-import { getSolanaTreasurySigner } from "../wallets/solanaKms.js";
 
 export interface FeeSplit {
   feeAmount: string;
@@ -26,22 +25,26 @@ export function computeFeeSplit(amount: string): FeeSplit {
 // would otherwise have started failing silently on every Stellar/Solana
 // send, on every provider, not just Centiiv (the sweep runs after ANY
 // successful payout broadcast, unconditional on which off-ramp provider
-// was used). Deliberately reuses each chain's EXISTING treasury/shared
-// account — Stellar's own omnibus deposit address, Solana's own
-// treasury signer — rather than standing up new dedicated addresses,
-// since both already pool every user's funds into one place per chain
-// the same way the EVM treasury does.
+// was used).
+//
+// Stellar/Solana each use their OWN dedicated fee-only treasury address
+// (STELLAR_TREASURY_FEE_ADDRESS / SOLANA_TREASURY_FEE_ADDRESS) —
+// deliberately separate from those chains' shared deposit/operational
+// treasury, per direct instruction, mirroring how the EVM treasury
+// address is already its own address distinct from the payout wallet.
 export async function requireTreasuryAddress(chain: string): Promise<string> {
   const c = chain.toLowerCase();
   if (c === "stellar") {
-    if (!env.stellarDepositAddress) {
-      throw new Error("STELLAR_DEPOSIT_ADDRESS must be set to process Stellar remittances");
+    if (!env.stellarTreasuryFeeAddress) {
+      throw new Error("STELLAR_TREASURY_FEE_ADDRESS must be set to process Stellar remittances");
     }
-    return env.stellarDepositAddress;
+    return env.stellarTreasuryFeeAddress;
   }
   if (c === "solana") {
-    const treasury = await getSolanaTreasurySigner();
-    return treasury.address;
+    if (!env.solanaTreasuryFeeAddress) {
+      throw new Error("SOLANA_TREASURY_FEE_ADDRESS must be set to process Solana remittances");
+    }
+    return env.solanaTreasuryFeeAddress;
   }
   if (!env.remittanceTreasuryAddress) {
     throw new Error("REMITTANCE_TREASURY_ADDRESS must be set to process remittances");
