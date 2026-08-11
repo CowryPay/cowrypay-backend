@@ -107,11 +107,26 @@ function levenshtein(a: string, b: string): number {
 
 /**
  * Find the best matches for `query` among `institutions`. Tries, in order:
- * substring (either direction), acronym/abbreviation, then typo-tolerant
- * fuzzy matching. Returns an empty array if nothing is close enough — the
- * caller should fall back to showing the full institution list.
+ * EXACT name match, alias, substring (either direction), acronym/
+ * abbreviation, then typo-tolerant fuzzy matching. Returns an empty array
+ * if nothing is close enough — the caller should fall back to showing the
+ * full institution list.
  */
 export function findInstitutionMatches(query: string, institutions: Institution[]): Institution[] {
+  // Checked first, ahead of every fuzzy strategy below — real bug found
+  // live via offrampRoutes' cross-provider institution matching
+  // (remittanceDraft.ts): querying Centiiv's much larger 488-bank list
+  // with "Access Bank" or "Kuda Microfinance Bank" — both real, exact
+  // names in that list — returned 3 and 2 matches respectively (including
+  // "Kuda" fuzzy-matching the wholly unrelated "UDA Microfinance Bank"),
+  // never reaching a confident single match despite an exact name being
+  // right there. An exact (case/whitespace-insensitive) match is
+  // unambiguous by construction — no reason to ever let fuzzier logic
+  // second-guess it.
+  const exactKey = query.trim().toLowerCase();
+  const exactMatches = institutions.filter((inst) => inst.name.trim().toLowerCase() === exactKey);
+  if (exactMatches.length > 0) return exactMatches;
+
   const aliasKey = rawNormalize(query);
   const aliasKeywords = ALIASES[aliasKey];
   if (aliasKeywords) {
