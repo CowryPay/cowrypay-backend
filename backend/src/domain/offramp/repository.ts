@@ -114,12 +114,17 @@ export const sendsRepo = {
   async updateState(
     client: PoolClient,
     id: string,
-    input: { state: SendState; withdrawTxHash?: string | null },
+    input: { state: SendState; withdrawTxHash?: string | null; rate?: string | null },
   ): Promise<Send> {
+    // rate is normally set once, at order creation (updateOrderCreated) —
+    // the one exception is Centiiv, which gives no rate upfront at all
+    // (see centiivAdapter.ts) and only reveals it once settlement actually
+    // happens, discovered by centiivSettlementPoller.ts alongside the same
+    // state transition to COMPLETE this call already makes.
     const { rows } = await client.query(
-      `update sends set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), updated_at = now()
+      `update sends set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), rate = coalesce($4, rate), updated_at = now()
        where id = $1 returning *`,
-      [id, input.state, input.withdrawTxHash ?? null],
+      [id, input.state, input.withdrawTxHash ?? null, input.rate ?? null],
     );
     return mapSend(rows[0]);
   },

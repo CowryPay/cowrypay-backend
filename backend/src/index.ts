@@ -24,6 +24,7 @@ import { cryptoWithdrawalsRouter } from "./routes/cryptoWithdrawals.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 import { startPaycrestSettlementPoller } from "./domain/offramp/paycrestSettlementPoller.js";
 import { startQuidaxSettlementPoller } from "./domain/offramp/quidaxSettlementPoller.js";
+import { startCentiivSettlementPoller } from "./domain/offramp/centiivSettlementPoller.js";
 import { startCryptoWithdrawalConfirmationPoller } from "./domain/cryptoWithdrawals/cryptoWithdrawalConfirmationPoller.js";
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
@@ -60,6 +61,7 @@ app.listen(env.port, () => {
 startWithdrawConfirmationPoller();
 startPaycrestSettlementPoller();
 startQuidaxSettlementPoller();
+startCentiivSettlementPoller();
 startCryptoWithdrawalConfirmationPoller();
 startDepositScanner();
 startDepositSweeper();

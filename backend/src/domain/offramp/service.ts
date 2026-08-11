@@ -11,6 +11,7 @@ import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
 import { createOfframpOrder as createQuidaxOrder } from "./quidaxAdapter.js";
+import { createOfframpOrder as createCentiivOrder } from "./centiivAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
 import type { OfframpProvider } from "./providerSelection.js";
@@ -112,6 +113,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
   const chain = input.chain ?? wallet.chain;
+  const walletAddress = wallet.address;
 
   // Reuse the chat-locked order only if it hasn't expired by the time the
   // user actually confirms — Paycrest quotes are only valid for ~1hr.
@@ -160,30 +162,30 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // chose (see InitiateSendInput.provider's own comment on why this isn't
   // re-decided here).
   const provider: OfframpProvider = reusable?.provider ?? input.provider ?? "paycrest";
-  const order =
-    reusable ??
-    (provider === "quidax"
-      ? await createQuidaxOrder({
-          amount: netAmount,
-          network: chain,
-          fiatCurrency: input.fiatCurrency,
-          recipient: {
-            institution: input.recipient.institution,
-            accountIdentifier: input.recipient.accountIdentifier,
-            accountName: input.recipient.accountName,
-          },
-          reference,
-        })
-      : await createOfframpOrder({
-          amount: netAmount,
-          token: env.defaultTokenSymbol,
-          network: chain,
-          refundAddress: wallet.address,
-          fiatCurrency: input.fiatCurrency,
-          recipient: input.recipient,
-          reference,
-          rate: input.rate,
-        }));
+  async function createOrderForProvider(): Promise<CreatedOrder> {
+    const recipient = {
+      institution: input.recipient.institution,
+      accountIdentifier: input.recipient.accountIdentifier,
+      accountName: input.recipient.accountName,
+    };
+    if (provider === "quidax") {
+      return createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency: input.fiatCurrency, recipient, reference });
+    }
+    if (provider === "centiiv") {
+      return createCentiivOrder({ amount: netAmount, network: chain, fiatCurrency: input.fiatCurrency, recipient, reference });
+    }
+    return createOfframpOrder({
+      amount: netAmount,
+      token: env.defaultTokenSymbol,
+      network: chain,
+      refundAddress: walletAddress,
+      fiatCurrency: input.fiatCurrency,
+      recipient: input.recipient,
+      reference,
+      rate: input.rate,
+    });
+  }
+  const order = reusable ?? (await createOrderForProvider());
 
   const updated = await withTransaction(async (client) => {
     const next = await sendsRepo.updateOrderCreated(client, send.id, {

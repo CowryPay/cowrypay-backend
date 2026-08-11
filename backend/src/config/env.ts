@@ -51,6 +51,20 @@ export const env = {
   quidaxPublicKey: process.env.QUIDAX_PUBLIC_KEY,
   quidaxSecretKey: process.env.QUIDAX_SECRET_KEY,
   quidaxBaseUrl: process.env.QUIDAX_RAMP_BASE_URL ?? "https://ramp-be.quidax.io/api/v1",
+  // Third off-ramp provider (Centiiv Protocol API) — explicit-only, never
+  // auto-selected by providerSelection.ts's rate comparison (see
+  // centiivAdapter.ts's own comment: unlike Paycrest/Quidax, Centiiv gives
+  // no rate until after a real order is created and the deposit settles,
+  // so there's nothing to compare upfront). Verified live against their
+  // real API (api.centiiv.io), not their docs site, which blocked/redirected
+  // every automated fetch attempted. publicKey (X-API-Key header) is what
+  // every confirmed endpoint actually uses; secretKey is documented as
+  // "server-to-server only" but no endpoint requiring it has been found
+  // yet — kept for when webhook signature verification (still unconfirmed,
+  // see centiivSettlementPoller.ts) or another privileged use turns up.
+  centiivPublicKey: process.env.CENTIIV_PUBLIC_KEY,
+  centiivSecretKey: process.env.CENTIIV_SECRET_KEY,
+  centiivBaseUrl: process.env.CENTIIV_BASE_URL ?? "https://api.centiiv.io",
   // How long a half-finished multi-turn chat draft (e.g. a partial send
   // request) survives with no reply before the next message starts fresh.
   chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 10),

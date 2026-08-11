@@ -1,7 +1,21 @@
 import { getOfframpRate as getPaycrestRate } from "./paycrestAdapter.js";
 import { getOfframpRate as getQuidaxRate, quidaxNetworkFor } from "./quidaxAdapter.js";
+import { centiivNetworkFor } from "./centiivAdapter.js";
 
-export type OfframpProvider = "paycrest" | "quidax";
+// "centiiv" is a real, valid value here (dispatchable via
+// InitiateSendInput.provider) but deliberately never returned by
+// selectOfframpProvider below — Centiiv gives no rate until after a real
+// order is created and the deposit settles (see centiivAdapter.ts), so
+// there's nothing to compare against Paycrest/Quidax's upfront quotes.
+// Explicit-only by design, not an oversight.
+export type OfframpProvider = "paycrest" | "quidax" | "centiiv";
+
+// Not used by selectOfframpProvider (Centiiv is explicit-only, see above)
+// — exported for callers that need to check chain eligibility before
+// offering Centiiv as a manual choice.
+export function isCentiivEligible(chain: string): boolean {
+  return centiivNetworkFor(chain) !== null;
+}
 
 export interface ProviderQuote {
   provider: OfframpProvider;
