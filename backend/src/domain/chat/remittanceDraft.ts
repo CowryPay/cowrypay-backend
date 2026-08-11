@@ -18,7 +18,13 @@ import {
 } from "../offramp/paycrestAdapter.js";
 import { getInstitutions as getQuidaxInstitutions, createOfframpOrder as createQuidaxOrder } from "../offramp/quidaxAdapter.js";
 import { getInstitutions as getCentiivInstitutions, createOfframpOrder as createCentiivOrder } from "../offramp/centiivAdapter.js";
-import { selectOfframpProvider, isQuidaxEligible, isCentiivEligible, type OfframpProvider } from "../offramp/providerSelection.js";
+import {
+  selectOfframpProvider,
+  isQuidaxEligible,
+  isCentiivEligible,
+  isPaycrestEligible,
+  type OfframpProvider,
+} from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -231,7 +237,12 @@ async function finalizeRemittanceDraft(
     // name-match rejection at Quidax's bank-account-attach step, or
     // Centiiv's own live bank-account verification) — the user can still
     // send via Paycrest, so retry there once before actually giving up.
-    if (provider !== "paycrest") {
+    // BUT only if Paycrest actually supports this chain at all — verified
+    // live that it structurally doesn't for Optimism/Solana/Stellar (a
+    // hard "not supported" error, not a liquidity gap), so blindly
+    // retrying there for e.g. a Stellar send just produced Paycrest's own
+    // confusing raw validation error instead of an honest message.
+    if (provider !== "paycrest" && isPaycrestEligible(chain)) {
       try {
         provider = "paycrest";
         finalRecipient = recipient; // undo the alt-provider-coded recipient, back to Paycrest's own coding
@@ -247,6 +258,14 @@ async function finalizeRemittanceDraft(
       }
     } else if (err instanceof NoLiquidityProviderError) {
       return { ok: false, message: err.message };
+    } else if (provider !== "paycrest") {
+      // The alt provider failed and Paycrest was never a real option for
+      // this chain — an honest, non-technical message instead of either
+      // provider's raw error text.
+      return {
+        ok: false,
+        message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
+      };
     } else {
       return {
         ok: false,

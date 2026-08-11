@@ -14,7 +14,7 @@ import { createOfframpOrder as createQuidaxOrder } from "./quidaxAdapter.js";
 import { createOfframpOrder as createCentiivOrder } from "./centiivAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
-import type { OfframpProvider } from "./providerSelection.js";
+import { isPaycrestEligible, type OfframpProvider } from "./providerSelection.js";
 
 // Carried over from a chat draft (domain/chat/remittanceDraft.ts), which
 // already locked a real rate/receive address (against the net amount, after
@@ -162,6 +162,19 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // chose (see InitiateSendInput.provider's own comment on why this isn't
   // re-decided here).
   const provider: OfframpProvider = reusable?.provider ?? input.provider ?? "paycrest";
+  // Verified live: Paycrest structurally doesn't support Optimism/Solana/
+  // Stellar at all (a hard "not supported" error, not a liquidity gap —
+  // see paycrestAdapter.ts's own comment). A caller reaching here with
+  // provider=paycrest (or no provider at all, defaulting to it) for one
+  // of these chains would otherwise get Paycrest's own confusing raw
+  // validation error instead of an honest one — callers are expected to
+  // use GET /offramp/rate first to pick an eligible provider, but this is
+  // the last line of defense if they don't.
+  if (!reusable && provider === "paycrest" && !isPaycrestEligible(chain)) {
+    throw new Error(
+      `Off-ramping from ${chain} isn't available via Paycrest — check GET /offramp/rate for which provider actually supports this chain.`,
+    );
+  }
   async function createOrderForProvider(): Promise<CreatedOrder> {
     const recipient = {
       institution: input.recipient.institution,

@@ -1,5 +1,23 @@
 import { env } from "../../config/env.js";
 
+// Verified live against the real API (2026-08-12) — Paycrest returns a
+// hard "Token USDC is not supported on network X" for Optimism, Solana,
+// and Stellar, both at rate-lookup AND order-creation time. Distinct from
+// Celo's known quirk (rate-preview alone fails with "no provider
+// available," but real order creation still works — confirmed via many
+// completed Celo sends this session) — that's a liquidity/preview gap,
+// this is Paycrest structurally not having the network at all. Used to
+// gate providerSelection.ts's rate comparison AND, critically, the
+// fallback-to-Paycrest retry in remittanceDraft.ts, which was blindly
+// retrying Paycrest for Stellar sends whenever the winning alt provider
+// failed — producing exactly this confusing raw validation error instead
+// of an honest "no provider available" message.
+const UNSUPPORTED_NETWORKS = new Set(["optimism", "solana", "stellar"]);
+
+export function isPaycrestEligible(chain: string): boolean {
+  return !UNSUPPORTED_NETWORKS.has(chain.toLowerCase());
+}
+
 // Distinguished from a generic order-creation failure so callers can show a
 // clean, actionable message instead of relaying Paycrest's raw validation
 // text — this fires when no liquidity provider will fill an order (seen in

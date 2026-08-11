@@ -1,6 +1,8 @@
-import { getOfframpRate as getPaycrestRate } from "./paycrestAdapter.js";
+import { getOfframpRate as getPaycrestRate, isPaycrestEligible } from "./paycrestAdapter.js";
 import { getOfframpRate as getQuidaxRate, quidaxNetworkFor } from "./quidaxAdapter.js";
 import { getOfframpRate as getCentiivRate, centiivNetworkFor } from "./centiivAdapter.js";
+
+export { isPaycrestEligible };
 
 export type OfframpProvider = "paycrest" | "quidax" | "centiiv";
 
@@ -36,14 +38,16 @@ export async function selectOfframpProvider(params: {
   amount: string;
   fiatCurrency: string;
 }): Promise<ProviderQuote> {
-  const paycrestPromise: Promise<ProviderQuote | null> = getPaycrestRate({
-    network: params.chain,
-    token: "USDC",
-    amount: params.amount,
-    fiatCurrency: params.fiatCurrency,
-  })
-    .then((q) => ({ provider: "paycrest" as const, toAmount: (Number(params.amount) * Number(q.rate)).toString() }))
-    .catch(() => null);
+  const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain)
+    ? getPaycrestRate({
+        network: params.chain,
+        token: "USDC",
+        amount: params.amount,
+        fiatCurrency: params.fiatCurrency,
+      })
+        .then((q) => ({ provider: "paycrest" as const, toAmount: (Number(params.amount) * Number(q.rate)).toString() }))
+        .catch(() => null)
+    : Promise.resolve(null);
 
   const quidaxPromise: Promise<ProviderQuote | null> = isQuidaxEligible(params.chain)
     ? getQuidaxRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
