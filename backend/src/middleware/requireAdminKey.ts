@@ -17,3 +17,21 @@ export function requireAdminKey(req: Request, res: Response): boolean {
   }
   return true;
 }
+
+// Narrower than requireAdminKey — accepts a SEPARATE, read-only-scoped
+// secret (ADMIN_METRICS_KEY) meant for the frontend admin dashboard's own
+// backend, so a leaked dashboard key can't reach the write endpoints
+// (correct-state, deposit resolve) that requireAdminKey alone guards. The
+// full admin key also works here, since it's a strict superset.
+export function requireMetricsKey(req: Request, res: Response): boolean {
+  if (!env.adminApiKey && !env.adminMetricsKey) {
+    res.status(503).json({ error: "admin endpoint not configured" });
+    return false;
+  }
+  const provided = req.header("x-admin-key");
+  if (provided !== env.adminApiKey && provided !== env.adminMetricsKey) {
+    res.status(401).json({ error: "invalid admin key" });
+    return false;
+  }
+  return true;
+}

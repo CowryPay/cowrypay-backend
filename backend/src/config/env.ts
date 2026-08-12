@@ -89,6 +89,12 @@ export const env = {
   // (x-admin-key) rather than real per-admin auth. Only required when that
   // endpoint is actually called — checked lazily, not here.
   adminApiKey: process.env.ADMIN_API_KEY,
+  // Narrower sibling of adminApiKey — grants ONLY the read-only dashboard
+  // endpoints (requireMetricsKey), not the write endpoints requireAdminKey
+  // alone guards (correct-state, deposit resolve). Handed to the frontend
+  // admin dashboard's own backend so a leaked/compromised dashboard key
+  // can't be used to tamper with financial records.
+  adminMetricsKey: process.env.ADMIN_METRICS_KEY,
   // Only required when walletProvider === "aws-kms" — checked lazily by
   // that adapter, not here, same pattern as the Blockradar vars above.
   awsRegion: process.env.AWS_REGION,

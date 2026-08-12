@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { adminRepo } from "../domain/admin/repository.js";
-import { requireAdminKey } from "../middleware/requireAdminKey.js";
+import { requireAdminKey, requireMetricsKey } from "../middleware/requireAdminKey.js";
 import { unmatchedStellarDepositsRepo } from "../domain/deposits/unmatchedStellarDepositsRepository.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
 import { ingestDeposit } from "../domain/deposits/stateMachine.js";
@@ -16,7 +16,7 @@ export const adminRouter = Router();
 // overview page, but across every provider we actually use (aws-kms,
 // Blockradar, Stellar, Solana), which no third-party dashboard can show.
 adminRouter.get("/admin/overview", async (req: Request, res: Response) => {
-  if (!requireAdminKey(req, res)) return;
+  if (!requireMetricsKey(req, res)) return;
   const overview = await adminRepo.getOverview();
   res.json(overview);
 });
@@ -26,7 +26,7 @@ adminRouter.get("/admin/overview", async (req: Request, res: Response) => {
 // revenue only, never counting failed/pending attempts as if they were
 // real activity.
 adminRouter.get("/admin/metrics", async (req: Request, res: Response) => {
-  if (!requireAdminKey(req, res)) return;
+  if (!requireMetricsKey(req, res)) return;
   const metrics = await adminRepo.getMetrics();
   res.json(metrics);
 });
@@ -36,7 +36,7 @@ adminRouter.get("/admin/metrics", async (req: Request, res: Response) => {
 // distinguish flat from growing. Clamped to [1, 365] so a bad/absent query
 // param can't trigger an unbounded table scan.
 adminRouter.get("/admin/metrics/timeseries", async (req: Request, res: Response) => {
-  if (!requireAdminKey(req, res)) return;
+  if (!requireMetricsKey(req, res)) return;
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
   const timeseries = await adminRepo.getTimeseries(days);
   res.json({ days, timeseries });
