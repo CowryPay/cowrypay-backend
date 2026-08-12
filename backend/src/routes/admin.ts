@@ -9,6 +9,7 @@ import { sendsRepo } from "../domain/offramp/repository.js";
 import { withTransaction } from "../db/pool.js";
 import type { SendState } from "../types.js";
 import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
+import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 
 export const adminRouter = Router();
 
@@ -41,6 +42,21 @@ adminRouter.get("/admin/metrics/timeseries", async (req: Request, res: Response)
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
   const timeseries = await adminRepo.getTimeseries(days);
   res.json({ days, timeseries });
+});
+
+// Live on-chain balances, not anything derived from our own DB — two
+// distinct groups: feeTreasury is what the platform has actually earned
+// (the 3 dedicated fee-sweep addresses), operational is what pays out
+// sends and needs to stay funded (real incident this session: the Solana
+// treasury ran low on SOL and wallet creation started failing with zero
+// visibility until a user hit the error — this is the early-warning view
+// into that same problem, across every chain). Read-only, so it's on the
+// same metrics-scoped key as the rest of the dashboard, not the full
+// admin key.
+adminRouter.get("/admin/treasury", async (req: Request, res: Response) => {
+  if (!requireMetricsKey(req, res)) return;
+  const snapshot = await getTreasurySnapshot();
+  res.json(snapshot);
 });
 
 // Diagnostic: "why didn't the fee reach treasury" — shows each send's fee
