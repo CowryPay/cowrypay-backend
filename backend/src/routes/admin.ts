@@ -5,6 +5,9 @@ import { requireAdminKey } from "../middleware/requireAdminKey.js";
 import { unmatchedStellarDepositsRepo } from "../domain/deposits/unmatchedStellarDepositsRepository.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
 import { ingestDeposit } from "../domain/deposits/stateMachine.js";
+import { sendsRepo } from "../domain/offramp/repository.js";
+import { withTransaction } from "../db/pool.js";
+import type { SendState } from "../types.js";
 
 export const adminRouter = Router();
 
@@ -106,6 +109,68 @@ adminRouter.post("/admin/stellar/unmatched-deposits/:id/resolve", async (req: Re
     txHash: deposit.txHash,
   });
   await unmatchedStellarDepositsRepo.markResolved(deposit.id, parsed.data.actor);
+
+  res.json({ ok: true });
+});
+
+const CorrectSendStateSchema = z.object({
+  state: z.enum([
+    "SEND_INSTRUCTED",
+    "COMPLIANCE_SCREENING",
+    "MANUAL_REVIEW",
+    "SEND_REJECTED",
+    "ORDER_CREATED",
+    "PAYOUT_INITIATED",
+    "SETTLING",
+    "COMPLETE",
+    "FAILED",
+    "REFUNDED",
+  ]),
+  note: z.string().min(1),
+  actor: z.string().min(1),
+});
+
+// Real incident that motivated this: centiivSettlementPoller.ts treats
+// metadata.rate becoming non-null as "settled," since no other terminal
+// signal had ever been observed live — but a real order (Centiiv's own
+// dashboard: status REFUNDED) proved that heuristic wrong, with a rate
+// populated on an order that was never actually fulfilled. Our sends row
+// showed COMPLETE while Centiiv's own system said REFUNDED, and on-chain
+// tracing confirmed the crypto never returned to our registered refund
+// address either.
+//
+// Deliberately a pure audit correction, NOT applyTerminalFailureTransition
+// (sendStateTransition.ts) — that helper always credits the send's user
+// back, which is the right call when OUR system is the one that failed a
+// send. This is the opposite case: the provider's own system disagrees
+// with ours about what actually happened, and whether/how to make the
+// user whole is a business decision, not something safe to automate.
+adminRouter.post("/admin/sends/:id/correct-state", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = CorrectSendStateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const send = await sendsRepo.findById(req.params.id);
+  if (!send) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+
+  const nextState = parsed.data.state as SendState;
+  await withTransaction(async (client) => {
+    await sendsRepo.updateState(client, send.id, { state: nextState });
+    await sendsRepo.logTransition(
+      client,
+      send.id,
+      send.state,
+      nextState,
+      `admin_correction: ${parsed.data.note}`,
+      parsed.data.actor,
+    );
+  });
 
   res.json({ ok: true });
 });
