@@ -8,6 +8,7 @@ import { ingestDeposit } from "../domain/deposits/stateMachine.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
 import { withTransaction } from "../db/pool.js";
 import type { SendState } from "../types.js";
+import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
 
 export const adminRouter = Router();
 
@@ -173,4 +174,42 @@ adminRouter.post("/admin/sends/:id/correct-state", async (req: Request, res: Res
   });
 
   res.json({ ok: true });
+});
+
+const StellarTreasuryTransferSchema = z.object({
+  toAddress: z.string().min(1),
+  amount: z.string().min(1),
+  reference: z.string().min(1),
+});
+
+// One-off ops tool for moving funds between our own Stellar-controlled
+// wallets (e.g. sweeping a recovered provider refund from the Centiiv-
+// registered refund address into the platform fee treasury) — reuses
+// stellarWalletAdapter.withdraw() rather than a standalone script so the
+// transaction goes through the SAME in-process serialize() queue as every
+// other live withdraw off this shared omnibus account. A script running
+// outside the server process would read the account's sequence number
+// independently of that queue and could race real production withdraws
+// happening at the same time (tx_bad_seq for one side or the other) — the
+// exact failure mode serialize() exists to prevent.
+adminRouter.post("/admin/stellar/treasury-transfer", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = StellarTreasuryTransferSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  try {
+    const result = await stellarWalletAdapter.withdraw({
+      chain: "stellar",
+      tokenSymbol: "USDC",
+      toAddress: parsed.data.toAddress,
+      amount: parsed.data.amount,
+      reference: parsed.data.reference,
+    });
+    res.json({ ok: true, txHash: result.txHash, status: result.status });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
