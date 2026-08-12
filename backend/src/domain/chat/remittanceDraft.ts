@@ -17,7 +17,12 @@ import {
   type CreatedOrder,
 } from "../offramp/paycrestAdapter.js";
 import { getInstitutions as getQuidaxInstitutions, createOfframpOrder as createQuidaxOrder } from "../offramp/quidaxAdapter.js";
-import { getInstitutions as getCentiivInstitutions, createOfframpOrder as createCentiivOrder } from "../offramp/centiivAdapter.js";
+import {
+  getInstitutions as getCentiivInstitutions,
+  createOfframpOrder as createCentiivOrder,
+  centiivBeneficiaryTypeFor,
+  centiivMobileMoneyNetworkFor,
+} from "../offramp/centiivAdapter.js";
 import {
   selectOfframpProvider,
   isQuidaxEligible,
@@ -185,15 +190,15 @@ async function finalizeRemittanceDraft(
   // stored on the resulting `send` row, so it must never end up mixing
   // one provider's institution code with another's order.
   let finalRecipient: SendRecipient = recipient;
-  let altRecipient: { institution: string; accountIdentifier: string; accountName: string } | null = null;
+  let altRecipient: { institution: string; accountIdentifier: string; accountName: string; network?: string } | null =
+    null;
 
   if (isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency)) {
     try {
       const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
       console.log(`[remittance-draft] provider selection for ${chain}: ${selection.provider} (toAmount=${selection.toAmount})`);
-      if (selection.provider === "quidax" || selection.provider === "centiiv") {
-        const altInstitutions =
-          selection.provider === "quidax" ? await getQuidaxInstitutions(fiatCurrency) : await getCentiivInstitutions();
+      if (selection.provider === "quidax") {
+        const altInstitutions = await getQuidaxInstitutions(fiatCurrency);
         const searchTerm = recipient.institutionName ?? recipient.institution;
         const matches = findInstitutionMatches(searchTerm, altInstitutions);
         if (matches.length === 1) {
@@ -212,6 +217,51 @@ async function finalizeRemittanceDraft(
           console.log(
             `[remittance-draft] ${selection.provider} won the rate for ${chain} but institution cross-match found ${matches.length} matches for "${searchTerm}" (need exactly 1) — falling back to paycrest, which isn't eligible for ${chain} either.`,
           );
+        }
+      } else if (selection.provider === "centiiv") {
+        const beneficiaryType = centiivBeneficiaryTypeFor(fiatCurrency);
+        if (beneficiaryType === "BANK") {
+          // NGN — same institution-code cross-match as Quidax above.
+          const altInstitutions = await getCentiivInstitutions();
+          const searchTerm = recipient.institutionName ?? recipient.institution;
+          const matches = findInstitutionMatches(searchTerm, altInstitutions);
+          if (matches.length === 1) {
+            const matched = matches[0]!;
+            provider = selection.provider;
+            finalRecipient = { ...recipient, institution: matched.code, institutionName: matched.name };
+            altRecipient = {
+              institution: matched.code,
+              accountIdentifier: recipient.accountIdentifier,
+              accountName: recipient.accountName,
+            };
+          } else {
+            console.log(
+              `[remittance-draft] centiiv won the rate for ${chain} but institution cross-match found ${matches.length} matches for "${searchTerm}" (need exactly 1) — falling back to paycrest, which isn't eligible for ${chain} either.`,
+            );
+          }
+        } else if (beneficiaryType === "MOBILEMONEY") {
+          // UGX/KES/GHS — there's no institution list to cross-match
+          // against at all (Centiiv's /banking/banks is NGN bank codes
+          // only); the "institution" here is really a carrier network, a
+          // small fixed enum resolved directly from what the user already
+          // named (see centiivMobileMoneyNetworkFor's own comment on why
+          // this differs from the BANK cross-match above).
+          const searchTerm = recipient.institutionName ?? recipient.institution;
+          const network = centiivMobileMoneyNetworkFor(fiatCurrency, searchTerm);
+          if (network) {
+            provider = selection.provider;
+            finalRecipient = { ...recipient, institution: network, institutionName: network };
+            altRecipient = {
+              institution: network,
+              accountIdentifier: recipient.accountIdentifier,
+              accountName: recipient.accountName,
+              network,
+            };
+          } else {
+            console.log(
+              `[remittance-draft] centiiv won the rate for ${chain} but couldn't resolve a mobile money network for ${fiatCurrency} from "${searchTerm}" — falling back to paycrest, which isn't eligible for ${chain} either.`,
+            );
+          }
         }
       }
     } catch (err) {

@@ -31,13 +31,49 @@ export function centiivNetworkFor(chain: string): string | null {
 // Real bug found live: providerSelection.ts's isCentiivEligible() only
 // ever checked chain support, never fiatCurrency. Centiiv's /public/quote
 // doesn't validate toAsset either — it happily returned a real-looking
-// rate for a UGX request ("1 USDC = 3697.343 UGX") despite Centiiv having
-// no actual UGX payout rail (every rail confirmed above is ...->NGN only).
-// That fake-valid quote won the rate comparison, a real order was
-// created, real USDC left custody, and it eventually bounced back
-// REFUNDED — so this can't rely on the provider to reject an unsupported
-// currency; it has to be gated before ever asking Centiiv for a quote.
-export const CENTIIV_SUPPORTED_FIAT_CURRENCIES = new Set(["NGN"]);
+// rate for a UGX request ("1 USDC = 3697.343 UGX") despite the order we
+// sent using the wrong beneficiary shape entirely (BANK with a Nigerian
+// bank code, for a country that isn't bank-routed at all) — so that fake
+// order bounced back REFUNDED. Centiiv's own team confirmed UGX is real,
+// just MOBILEMONEY-routed, not BANK — see centiivBeneficiaryTypeFor below.
+// Verified live (2026-08-12) via their own validation-error responses
+// (same technique as finding /public/quote): UGX/KES/GHS all genuinely
+// accept a correctly-shaped MOBILEMONEY order (real temp wallet returned,
+// left unfunded/expired rather than actually moving money to confirm).
+export const CENTIIV_SUPPORTED_FIAT_CURRENCIES = new Set(["NGN", "UGX", "KES", "GHS"]);
+
+// Each currency's mobile-money rail has its own fixed carrier network —
+// confirmed live by deliberately sending an invalid network value and
+// reading Centiiv's validation error, e.g. "beneficiary.destination.network
+// must be equal to MPESA" for KES. GHS additionally rejects accountName
+// outright ("property accountName should not exist") — its beneficiary
+// shape has one fewer field than UGX/KES, not just a different network.
+const MOBILE_MONEY_BY_CURRENCY: Record<string, { networks: string[]; includeAccountName: boolean }> = {
+  UGX: { networks: ["MTN", "AIRTEL"], includeAccountName: true },
+  KES: { networks: ["MPESA"], includeAccountName: true },
+  GHS: { networks: ["MTN"], includeAccountName: false },
+};
+
+export function centiivBeneficiaryTypeFor(fiatCurrency: string): "BANK" | "MOBILEMONEY" | null {
+  const currency = fiatCurrency.toUpperCase();
+  if (currency === "NGN") return "BANK";
+  if (currency in MOBILE_MONEY_BY_CURRENCY) return "MOBILEMONEY";
+  return null;
+}
+
+// KES and GHS only ever have one valid network, so no resolution is
+// needed. UGX has two (MTN and AIRTEL) — resolved from the recipient's own
+// institution name, the same free-text a user already typed/selected in
+// chat (e.g. "MTN Mobile Money Uganda" vs "Airtel Money Uganda"). Returns
+// null if it can't be determined, which callers must treat as a failed
+// resolution (same as an institution cross-match failure), not a guess.
+export function centiivMobileMoneyNetworkFor(fiatCurrency: string, institutionHint?: string): string | null {
+  const config = MOBILE_MONEY_BY_CURRENCY[fiatCurrency.toUpperCase()];
+  if (!config) return null;
+  if (config.networks.length === 1) return config.networks[0]!;
+  const hint = (institutionHint ?? "").toUpperCase();
+  return config.networks.find((n) => hint.includes(n)) ?? null;
+}
 
 function requireCentiivPublicKey(): string {
   if (!env.centiivPublicKey) {
@@ -68,8 +104,11 @@ export interface Institution {
 
 // GET /banking/banks — no country/currency param accepted or needed
 // (confirmed: passing none returns the full Nigerian bank list including
-// "Central Bank of Nigeria" itself); Centiiv's fiat side appears NGN-only
-// today, consistent with every rail confirmed above being ...->NGN.
+// "Central Bank of Nigeria" itself, and a country param is silently
+// ignored — confirmed by passing country=UG and getting the same NGN
+// list back). Only relevant for NGN's BANK rail — mobile-money currencies
+// (UGX/KES/GHS) don't have an institution list to resolve against at all;
+// their "network" is a small fixed enum, not a coded institution.
 export async function getInstitutions(): Promise<Institution[]> {
   const res = await centiivFetch<{ success: boolean; data: { name: string; code: string }[] }>("/banking/banks");
   return res.data.map((b) => ({ code: b.code, name: b.name, type: "bank" }));
@@ -113,9 +152,10 @@ export async function getOfframpRate(params: {
 }
 
 export interface OfframpRecipient {
-  institution: string; // Centiiv bank code (e.g. "090267"), not Paycrest's or Quidax's
-  accountIdentifier: string;
-  accountName: string; // not sent — Centiiv resolves + returns the real name itself (see CreatedOrder below); kept for interface parity with the other adapters
+  institution: string; // Centiiv bank code (e.g. "090267") — BANK/NGN only, ignored for MOBILEMONEY
+  accountIdentifier: string; // account number for BANK, phone number for MOBILEMONEY
+  accountName: string; // NGN: not sent, Centiiv resolves + returns the real name itself. UGX/KES: sent as-is. GHS: not sent (rejected outright if present).
+  network?: string; // required for MOBILEMONEY currencies — see centiivMobileMoneyNetworkFor
 }
 
 export interface CreateOrderInput {
@@ -143,9 +183,40 @@ export interface CreatedOrder {
 // address in one response. Rejects unknown body fields outright (a
 // whitelist-validated DTO, confirmed live), so the shape below is exactly
 // what's accepted, nothing more.
+//
+// The beneficiary shape genuinely differs by currency, not just its
+// contents — real bug found live: a UGX order was built with
+// `beneficiary.bankAccount` (a completely different top-level key from
+// `beneficiary.destination`, which MOBILEMONEY actually needs), carrying a
+// Nigerian bank code that meant nothing for a Uganda recipient. Centiiv's
+// validation accepted the request anyway (bankCode isn't checked against
+// real data) and it only surfaced as a REFUND after the fact.
 export async function createOfframpOrder(input: CreateOrderInput): Promise<CreatedOrder> {
   const network = centiivNetworkFor(input.network);
   if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${input.network} for USDC`);
+
+  const beneficiaryType = centiivBeneficiaryTypeFor(input.fiatCurrency);
+  if (!beneficiaryType) throw new Error(`Centiiv off-ramp doesn't support fiat currency ${input.fiatCurrency}`);
+
+  let beneficiary: unknown;
+  if (beneficiaryType === "BANK") {
+    beneficiary = {
+      bankAccount: { bankCode: input.recipient.institution, accountNumber: input.recipient.accountIdentifier },
+    };
+  } else {
+    if (!input.recipient.network) {
+      throw new Error(`Centiiv mobile money order for ${input.fiatCurrency} is missing a resolved network`);
+    }
+    const { includeAccountName } = MOBILE_MONEY_BY_CURRENCY[input.fiatCurrency.toUpperCase()]!;
+    beneficiary = {
+      destination: {
+        type: "MOBILEMONEY",
+        network: input.recipient.network,
+        accountNumber: input.recipient.accountIdentifier,
+        ...(includeAccountName ? { accountName: input.recipient.accountName } : {}),
+      },
+    };
+  }
 
   const quote = await getOfframpRate({ network: input.network, amount: input.amount, fiatCurrency: input.fiatCurrency });
 
@@ -160,9 +231,7 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
       toAsset: input.fiatCurrency.toUpperCase(),
       amount: Number(input.amount),
       network,
-      beneficiary: {
-        bankAccount: { bankCode: input.recipient.institution, accountNumber: input.recipient.accountIdentifier },
-      },
+      beneficiary,
     }),
   });
 

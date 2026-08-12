@@ -28,10 +28,12 @@ export function isQuidaxEligible(chain: string, fiatCurrency: string): boolean {
 
 // Centiiv supports 3 of our 5 chains (Stellar/Solana/Base — verified live
 // against their real API, see centiivAdapter.ts's own comment on this).
-// Also gated on fiatCurrency (NGN-only) — real bug found live: a UGX send
-// on an eligible chain got a fake-valid quote from Centiiv (they don't
-// validate toAsset), won the rate comparison, and the resulting order
-// bounced back REFUNDED (see CENTIIV_SUPPORTED_FIAT_CURRENCIES).
+// Also gated on fiatCurrency — real bug found live: a UGX send on an
+// eligible chain got a fake-valid quote from Centiiv (they don't validate
+// toAsset), won the rate comparison, and the order was built with the
+// wrong beneficiary shape entirely (BANK instead of MOBILEMONEY), which
+// only surfaced as a REFUND after the fact. Currently NGN (BANK), UGX/
+// KES/GHS (MOBILEMONEY) — see CENTIIV_SUPPORTED_FIAT_CURRENCIES.
 export function isCentiivEligible(chain: string, fiatCurrency: string): boolean {
   return centiivNetworkFor(chain) !== null && CENTIIV_SUPPORTED_FIAT_CURRENCIES.has(fiatCurrency.toUpperCase());
 }
