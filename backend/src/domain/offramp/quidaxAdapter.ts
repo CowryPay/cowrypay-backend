@@ -49,6 +49,17 @@ export interface Institution {
 // vocabulary as the rest of this codebase.
 const COUNTRY_FOR_FIAT: Record<string, string> = { NGN: "NG", GHS: "GH" };
 
+// Real bug found live: providerSelection.ts's isQuidaxEligible() only ever
+// checked chain support, never fiatCurrency — so a non-NGN/GHS send on an
+// otherwise-eligible chain (e.g. UGX on Base) still got compared here.
+// Quidax's own rate/order endpoints below don't validate to_currency
+// either, they just pass it straight through — same shape of gap as
+// Centiiv's (see CENTIIV_SUPPORTED_FIAT_CURRENCIES), so this can't rely on
+// the provider to reject it. Derived from COUNTRY_FOR_FIAT rather than a
+// second hardcoded list, since that's already the authoritative "what
+// currencies does Quidax off-ramp actually support" source in this file.
+export const QUIDAX_SUPPORTED_FIAT_CURRENCIES = new Set(Object.keys(COUNTRY_FOR_FIAT));
+
 export async function getInstitutions(fiatCurrency: string): Promise<Institution[]> {
   const country = COUNTRY_FOR_FIAT[fiatCurrency.toUpperCase()];
   if (!country) throw new Error(`Quidax off-ramp doesn't support fiat currency ${fiatCurrency}`);

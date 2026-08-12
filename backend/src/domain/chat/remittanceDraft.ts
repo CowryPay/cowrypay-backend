@@ -187,7 +187,7 @@ async function finalizeRemittanceDraft(
   let finalRecipient: SendRecipient = recipient;
   let altRecipient: { institution: string; accountIdentifier: string; accountName: string } | null = null;
 
-  if (isQuidaxEligible(chain) || isCentiivEligible(chain)) {
+  if (isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency)) {
     try {
       const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
       console.log(`[remittance-draft] provider selection for ${chain}: ${selection.provider} (toAmount=${selection.toAmount})`);

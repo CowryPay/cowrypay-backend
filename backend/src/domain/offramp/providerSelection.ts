@@ -1,6 +1,6 @@
 import { getOfframpRate as getPaycrestRate, isPaycrestEligible } from "./paycrestAdapter.js";
-import { getOfframpRate as getQuidaxRate, quidaxNetworkFor } from "./quidaxAdapter.js";
-import { getOfframpRate as getCentiivRate, centiivNetworkFor } from "./centiivAdapter.js";
+import { getOfframpRate as getQuidaxRate, quidaxNetworkFor, QUIDAX_SUPPORTED_FIAT_CURRENCIES } from "./quidaxAdapter.js";
+import { getOfframpRate as getCentiivRate, centiivNetworkFor, CENTIIV_SUPPORTED_FIAT_CURRENCIES } from "./centiivAdapter.js";
 
 export { isPaycrestEligible };
 
@@ -17,15 +17,23 @@ export interface ProviderQuote {
 
 // Quidax only supports USDC on 2 of our 5 chains (verified live against
 // their real API, see quidaxAdapter.ts's own comment on this) — checked
-// here before ever calling their API, not left to fail per-request.
-export function isQuidaxEligible(chain: string): boolean {
-  return quidaxNetworkFor(chain) !== null;
+// here before ever calling their API, not left to fail per-request. Also
+// gated on fiatCurrency, not just chain — real bug found live: an
+// eligible-chain send in an unsupported currency (e.g. UGX) was still
+// being compared here, since Quidax's own endpoints don't validate
+// to_currency either (see QUIDAX_SUPPORTED_FIAT_CURRENCIES's own comment).
+export function isQuidaxEligible(chain: string, fiatCurrency: string): boolean {
+  return quidaxNetworkFor(chain) !== null && QUIDAX_SUPPORTED_FIAT_CURRENCIES.has(fiatCurrency.toUpperCase());
 }
 
 // Centiiv supports 3 of our 5 chains (Stellar/Solana/Base — verified live
 // against their real API, see centiivAdapter.ts's own comment on this).
-export function isCentiivEligible(chain: string): boolean {
-  return centiivNetworkFor(chain) !== null;
+// Also gated on fiatCurrency (NGN-only) — real bug found live: a UGX send
+// on an eligible chain got a fake-valid quote from Centiiv (they don't
+// validate toAsset), won the rate comparison, and the resulting order
+// bounced back REFUNDED (see CENTIIV_SUPPORTED_FIAT_CURRENCIES).
+export function isCentiivEligible(chain: string, fiatCurrency: string): boolean {
+  return centiivNetworkFor(chain) !== null && CENTIIV_SUPPORTED_FIAT_CURRENCIES.has(fiatCurrency.toUpperCase());
 }
 
 // Queries every eligible provider in parallel and returns whichever gives
@@ -49,13 +57,13 @@ export async function selectOfframpProvider(params: {
         .catch(() => null)
     : Promise.resolve(null);
 
-  const quidaxPromise: Promise<ProviderQuote | null> = isQuidaxEligible(params.chain)
+  const quidaxPromise: Promise<ProviderQuote | null> = isQuidaxEligible(params.chain, params.fiatCurrency)
     ? getQuidaxRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "quidax" as const, toAmount: q.toAmount }))
         .catch(() => null)
     : Promise.resolve(null);
 
-  const centiivPromise: Promise<ProviderQuote | null> = isCentiivEligible(params.chain)
+  const centiivPromise: Promise<ProviderQuote | null> = isCentiivEligible(params.chain, params.fiatCurrency)
     ? getCentiivRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "centiiv" as const, toAmount: q.estimatedReceivableAmount }))
         .catch(() => null)

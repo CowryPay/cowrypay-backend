@@ -28,6 +28,17 @@ export function centiivNetworkFor(chain: string): string | null {
   return NETWORK_NAMES[chain.toLowerCase()] ?? null;
 }
 
+// Real bug found live: providerSelection.ts's isCentiivEligible() only
+// ever checked chain support, never fiatCurrency. Centiiv's /public/quote
+// doesn't validate toAsset either — it happily returned a real-looking
+// rate for a UGX request ("1 USDC = 3697.343 UGX") despite Centiiv having
+// no actual UGX payout rail (every rail confirmed above is ...->NGN only).
+// That fake-valid quote won the rate comparison, a real order was
+// created, real USDC left custody, and it eventually bounced back
+// REFUNDED — so this can't rely on the provider to reject an unsupported
+// currency; it has to be gated before ever asking Centiiv for a quote.
+export const CENTIIV_SUPPORTED_FIAT_CURRENCIES = new Set(["NGN"]);
+
 function requireCentiivPublicKey(): string {
   if (!env.centiivPublicKey) {
     throw new Error("CENTIIV_PUBLIC_KEY must be set to use the Centiiv off-ramp provider");
