@@ -2,6 +2,7 @@ import { withTransaction } from "../../db/pool.js";
 import { getOrderStatus } from "./paycrestAdapter.js";
 import { resolveNextSendState } from "./paycrestWebhook.js";
 import { sendsRepo } from "./repository.js";
+import { applyTerminalFailureTransition } from "./sendStateTransition.js";
 
 // Closes the gap left when Paycrest's payment_order.* webhook doesn't
 // arrive — confirmed live that it wasn't (zero hits on /webhooks/paycrest
@@ -24,8 +25,12 @@ export async function pollPendingSettlements(): Promise<void> {
       if (!nextState) continue; // same status as last check, or not a recognized/forward-moving one
 
       await withTransaction(async (client) => {
-        await sendsRepo.updateState(client, send.id, { state: nextState });
-        await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_settlement_poller");
+        if (nextState === "FAILED" || nextState === "REFUNDED") {
+          await applyTerminalFailureTransition(client, send, nextState, event, "paycrest_settlement_poller");
+        } else {
+          await sendsRepo.updateState(client, send.id, { state: nextState });
+          await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_settlement_poller");
+        }
       });
     } catch (err) {
       // One bad lookup (e.g. a transient Paycrest API error) must not block

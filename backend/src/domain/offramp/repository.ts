@@ -129,6 +129,25 @@ export const sendsRepo = {
     return mapSend(rows[0]);
   },
 
+  // Same as updateState, except the write only lands if the row is still
+  // in exactly the state the caller last read it as — the guard
+  // applyTerminalFailureTransition (sendStateTransition.ts) relies on to
+  // decide whether IT is the one that actually won a webhook-vs-poller
+  // race and should credit the ledger, vs. losing the race and no-op'ing.
+  async updateStateIfCurrent(
+    client: PoolClient,
+    id: string,
+    expectedCurrentState: SendState,
+    input: { state: SendState; withdrawTxHash?: string | null; rate?: string | null },
+  ): Promise<Send | null> {
+    const { rows } = await client.query(
+      `update sends set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), rate = coalesce($4, rate), updated_at = now()
+       where id = $1 and state = $5 returning *`,
+      [id, input.state, input.withdrawTxHash ?? null, input.rate ?? null, expectedCurrentState],
+    );
+    return rows[0] ? mapSend(rows[0]) : null;
+  },
+
   async logTransition(
     client: PoolClient,
     sendId: string,

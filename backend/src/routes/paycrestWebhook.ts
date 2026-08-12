@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { resolveNextSendState, verifyPaycrestSignature } from "../domain/offramp/paycrestWebhook.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
+import { applyTerminalFailureTransition } from "../domain/offramp/sendStateTransition.js";
 import { withTransaction } from "../db/pool.js";
 
 export const paycrestWebhookRouter = Router();
@@ -40,8 +41,12 @@ paycrestWebhookRouter.post("/webhooks/paycrest", async (req: Request, res: Respo
   }
 
   await withTransaction(async (client) => {
-    await sendsRepo.updateState(client, send.id, { state: nextState });
-    await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_webhook");
+    if (nextState === "FAILED" || nextState === "REFUNDED") {
+      await applyTerminalFailureTransition(client, send, nextState, event, "paycrest_webhook");
+    } else {
+      await sendsRepo.updateState(client, send.id, { state: nextState });
+      await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_webhook");
+    }
   });
 
   res.json({ ok: true });

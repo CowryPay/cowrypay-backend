@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { resolveNextSendState, verifyQuidaxSignature } from "../domain/offramp/quidaxWebhook.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
+import { applyTerminalFailureTransition } from "../domain/offramp/sendStateTransition.js";
 import { withTransaction } from "../db/pool.js";
 
 export const quidaxWebhookRouter = Router();
@@ -40,8 +41,12 @@ quidaxWebhookRouter.post("/webhooks/quidax", async (req: Request, res: Response)
   }
 
   await withTransaction(async (client) => {
-    await sendsRepo.updateState(client, send.id, { state: nextState });
-    await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "quidax_webhook");
+    if (nextState === "FAILED" || nextState === "REFUNDED") {
+      await applyTerminalFailureTransition(client, send, nextState, event, "quidax_webhook");
+    } else {
+      await sendsRepo.updateState(client, send.id, { state: nextState });
+      await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "quidax_webhook");
+    }
   });
 
   res.json({ ok: true });

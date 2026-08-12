@@ -3,6 +3,7 @@ import { verifyBlockradarSignature } from "../domain/deposits/blockradarWebhook.
 import { ingestDeposit } from "../domain/deposits/stateMachine.js";
 import { walletsRepo } from "../domain/wallets/repository.js";
 import { sendsRepo } from "../domain/offramp/repository.js";
+import { applyTerminalFailureTransition } from "../domain/offramp/sendStateTransition.js";
 import { withTransaction } from "../db/pool.js";
 import type { Send } from "../types.js";
 
@@ -81,8 +82,7 @@ blockradarWebhookRouter.post("/webhooks/blockradar", async (req: Request, res: R
       const { send } = match;
       if (send.state !== "FAILED" && send.state !== "COMPLETE") {
         await withTransaction(async (client) => {
-          await sendsRepo.updateState(client, send.id, { state: "FAILED" });
-          await sendsRepo.logTransition(client, send.id, send.state, "FAILED", "blockradar_withdraw_failed_webhook");
+          await applyTerminalFailureTransition(client, send, "FAILED", "blockradar_withdraw_failed_webhook", "system");
         });
       }
     }
