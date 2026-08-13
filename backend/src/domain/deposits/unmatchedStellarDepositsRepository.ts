@@ -57,6 +57,11 @@ export const unmatchedStellarDepositsRepo = {
     return rows[0] ? mapRow(rows[0]) : null;
   },
 
+  async findByTxHash(txHash: string): Promise<UnmatchedStellarDeposit | null> {
+    const { rows } = await pool.query(`select * from unmatched_stellar_deposits where tx_hash = $1`, [txHash]);
+    return rows[0] ? mapRow(rows[0]) : null;
+  },
+
   async markResolved(id: string, resolvedBy: string): Promise<void> {
     await pool.query(`update unmatched_stellar_deposits set resolved_at = now(), resolved_by = $2 where id = $1`, [
       id,

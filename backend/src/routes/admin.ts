@@ -10,6 +10,7 @@ import { withTransaction } from "../db/pool.js";
 import type { SendState } from "../types.js";
 import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
 import { getTreasurySnapshot } from "../domain/admin/treasury.js";
+import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
 
 export const adminRouter = Router();
 
@@ -80,6 +81,19 @@ adminRouter.get("/admin/stellar/unmatched-deposits", async (req: Request, res: R
   if (!requireAdminKey(req, res)) return;
   const deposits = await unmatchedStellarDepositsRepo.listUnresolved();
   res.json({ deposits });
+});
+
+// Walks Horizon's own payment history directly (ground truth) and
+// cross-checks each USDC payment against both the deposits table
+// (credited) and unmatched_stellar_deposits (flagged) — surfaces anything
+// in neither, which the unmatched-deposits list alone can't catch (e.g. a
+// silent failure in ingestDeposit itself, or a scanner cursor stuck behind
+// where it should be). See stellarDepositDiagnostic.ts for why this exists.
+adminRouter.get("/admin/stellar/deposit-diagnostic", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const lookback = Math.min(Number(req.query.lookback) || 100, 500);
+  const result = await diagnoseStellarDeposits(lookback);
+  res.json(result);
 });
 
 const ResolveUnmatchedDepositSchema = z.object({
