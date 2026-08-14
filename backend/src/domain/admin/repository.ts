@@ -424,4 +424,50 @@ export const adminRepo = {
       providerOrderId: r.provider_order_id,
     }));
   },
+
+  // Same shape as listRecentSends, filtered to one user instead of one
+  // chain — for tracing a specific "my balance looks wrong" report
+  // against their actual send history, not just guessing from ledger
+  // numbers alone.
+  async listSendsForUser(userId: string, limit: number): Promise<AdminSendDiagnostic[]> {
+    const { rows } = await pool.query(
+      `select s.id, s.chain, s.provider, s.amount_human, s.fee_amount, s.treasury_address, s.state,
+              s.withdraw_tx_hash, s.created_at, s.provider_order_id,
+              (
+                select t.trigger from send_state_transitions t
+                where t.send_id = s.id and t.trigger like 'fee_swe%'
+                order by t.created_at desc limit 1
+              ) as fee_sweep_trigger,
+              (
+                select t.created_at from send_state_transitions t
+                where t.send_id = s.id and t.to_state = 'COMPLETE'
+                order by t.created_at desc limit 1
+              ) as completed_at,
+              (
+                select t.trigger from send_state_transitions t
+                where t.send_id = s.id and t.to_state = 'COMPLETE'
+                order by t.created_at desc limit 1
+              ) as settlement_trigger
+       from sends s
+       where s.user_id = $1
+       order by s.created_at desc
+       limit $2`,
+      [userId, limit],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      chain: r.chain,
+      provider: r.provider,
+      amountHuman: r.amount_human,
+      feeAmount: r.fee_amount,
+      treasuryAddress: r.treasury_address,
+      state: r.state,
+      withdrawTxHash: r.withdraw_tx_hash,
+      completedAt: r.completed_at,
+      settlementTrigger: r.settlement_trigger,
+      createdAt: r.created_at,
+      feeSweepTrigger: r.fee_sweep_trigger,
+      providerOrderId: r.provider_order_id,
+    }));
+  },
 };

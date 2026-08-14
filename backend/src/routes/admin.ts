@@ -11,6 +11,7 @@ import type { SendState } from "../types.js";
 import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
 import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
+import { ledgerRepo } from "../domain/ledger/repository.js";
 
 export const adminRouter = Router();
 
@@ -247,4 +248,23 @@ adminRouter.post("/admin/stellar/treasury-transfer", async (req: Request, res: R
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+// Traces a "my balance looks wrong" report back to its actual source —
+// resolves a wallet address to its user, then returns that user's real
+// ledger balances (what the app shows) alongside their send history (what
+// actually happened), so a discrepancy can be pinned to a specific send
+// instead of guessed at from the ledger numbers alone.
+adminRouter.get("/admin/wallets/:address/diagnostic", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const wallet = await walletsRepo.findByAddress(req.params.address);
+  if (!wallet) {
+    res.status(404).json({ error: "no wallet found for this address" });
+    return;
+  }
+  const [balances, sends] = await Promise.all([
+    ledgerRepo.getBalancesForUser(wallet.userId),
+    adminRepo.listSendsForUser(wallet.userId, 50),
+  ]);
+  res.json({ userId: wallet.userId, walletAddress: wallet.address, balances, sends });
 });
