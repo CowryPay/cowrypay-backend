@@ -194,6 +194,15 @@ export interface OrderStatus {
   id: string;
   status: string;
   amountPaid?: string;
+  // Populated once Paycrest actually moves crypto on-chain themselves —
+  // confirmed live on a "refunded" order: this is the on-chain tx hash of
+  // THEIR OWN refund payment back to our refundAddress. Real incident
+  // this exists to close: that refund lands directly in a user's own
+  // AWS-KMS wallet, indistinguishable on-chain from an ordinary deposit —
+  // see sendStateTransition.ts's applyTerminalFailureTransition, which
+  // uses this to pre-register the transaction so the deposit scanner
+  // doesn't credit it a second time.
+  txHash?: string;
 }
 
 // docs.paycrest.io — GET /sender/orders/{id}, requires API key. Used to poll
@@ -211,9 +220,14 @@ export async function getOrderStatus(orderId: string): Promise<OrderStatus> {
     throw new Error(`Paycrest order status lookup failed (${res.status}): ${body}`);
   }
 
-  const json = (await res.json()) as { data?: { id: string; status: string; amountPaid?: string } };
+  const json = (await res.json()) as { data?: { id: string; status: string; amountPaid?: string; txHash?: string } };
   if (!json.data) {
     throw new Error("Paycrest order status response missing data");
   }
-  return { id: json.data.id, status: json.data.status, amountPaid: json.data.amountPaid };
+  return {
+    id: json.data.id,
+    status: json.data.status,
+    amountPaid: json.data.amountPaid,
+    txHash: json.data.txHash || undefined,
+  };
 }

@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import type { Send, SendState } from "../../types.js";
 import { sendsRepo } from "./repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
+import { depositsRepo } from "../deposits/repository.js";
 
 // Shared by every off-ramp provider's webhook handler (paycrestWebhook.ts,
 // quidaxWebhook.ts) — guards against a state going backwards if a provider
@@ -61,15 +62,53 @@ export function resolveNextSendState(
 // that race gets null back and no-ops — by the time it would otherwise
 // re-check, resolveNextSendState already refuses to compute a next state
 // for a current state that's already terminal.
+// Real incident this closes: Paycrest's own refund for a REFUNDED order
+// landed directly in the user's own AWS-KMS wallet — indistinguishable
+// on-chain from an ordinary new deposit — and the deposit scanner
+// credited that same transaction a SECOND time, on top of the ledger
+// credit below. Confirmed live via an exact tx-hash match between a
+// "deposit" and the provider's own refund transaction.
+//
+// Pre-registers that exact (chain, tx_hash) as an already-processed
+// deposit — reusing depositsRepo's own (chain, tx_hash) uniqueness rather
+// than adding a parallel mechanism — WITHOUT crediting the ledger a
+// second time (see stateMachine.ts's ingestDeposit: a row that already
+// exists and isn't DEPOSIT_DETECTED short-circuits as alreadyProcessed,
+// no re-credit). Same transaction as the state/ledger update above, so
+// there's no window where the scanner could race in between and credit
+// it first.
 export async function applyTerminalFailureTransition(
   client: PoolClient,
   send: Send,
   nextState: "FAILED" | "REFUNDED",
   trigger: string,
   actor: string,
+  providerRefundOnChain?: { txHash: string },
 ): Promise<void> {
   const updated = await sendsRepo.updateStateIfCurrent(client, send.id, send.state, { state: nextState });
   if (!updated) return; // lost the race — some other call already applied this transition
   await ledgerRepo.creditAvailable(client, send.userId, send.tokenSymbol, send.chain, send.amountHuman);
   await sendsRepo.logTransition(client, send.id, send.state, nextState, trigger, actor);
+
+  if (providerRefundOnChain) {
+    const inserted = await depositsRepo.insertIfNew(client, {
+      userId: send.userId,
+      walletId: send.walletId,
+      tokenSymbol: send.tokenSymbol,
+      amount: send.amountHuman,
+      chain: send.chain,
+      txHash: providerRefundOnChain.txHash,
+    });
+    if (inserted) {
+      await depositsRepo.updateState(client, inserted.id, "BALANCE_CREDITED");
+      await depositsRepo.logTransition(
+        client,
+        inserted.id,
+        "DEPOSIT_DETECTED",
+        "BALANCE_CREDITED",
+        `provider_refund_already_credited_via_send:${send.id}`,
+        actor,
+      );
+    }
+  }
 }

@@ -26,7 +26,14 @@ export async function pollPendingSettlements(): Promise<void> {
 
       await withTransaction(async (client) => {
         if (nextState === "FAILED" || nextState === "REFUNDED") {
-          await applyTerminalFailureTransition(client, send, nextState, event, "paycrest_settlement_poller");
+          await applyTerminalFailureTransition(
+            client,
+            send,
+            nextState,
+            event,
+            "paycrest_settlement_poller",
+            orderStatus.txHash ? { txHash: orderStatus.txHash } : undefined,
+          );
         } else {
           await sendsRepo.updateState(client, send.id, { state: nextState });
           await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_settlement_poller");

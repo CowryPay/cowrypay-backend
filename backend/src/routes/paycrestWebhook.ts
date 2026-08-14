@@ -21,6 +21,10 @@ paycrestWebhookRouter.post("/webhooks/paycrest", async (req: Request, res: Respo
 
   const event = req.body?.event as string | undefined;
   const orderId = req.body?.data?.id as string | undefined;
+  // Mirrors the same field the REST order-status response carries (see
+  // paycrestAdapter.ts's getOrderStatus) — only actually populated once
+  // Paycrest moves crypto on-chain themselves, e.g. a refund.
+  const refundTxHash = (req.body?.data?.txHash as string | undefined) || undefined;
   if (!event || !orderId) {
     res.status(400).json({ error: "missing event or data.id" });
     return;
@@ -42,7 +46,14 @@ paycrestWebhookRouter.post("/webhooks/paycrest", async (req: Request, res: Respo
 
   await withTransaction(async (client) => {
     if (nextState === "FAILED" || nextState === "REFUNDED") {
-      await applyTerminalFailureTransition(client, send, nextState, event, "paycrest_webhook");
+      await applyTerminalFailureTransition(
+        client,
+        send,
+        nextState,
+        event,
+        "paycrest_webhook",
+        refundTxHash ? { txHash: refundTxHash } : undefined,
+      );
     } else {
       await sendsRepo.updateState(client, send.id, { state: nextState });
       await sendsRepo.logTransition(client, send.id, send.state, nextState, event, "paycrest_webhook");
