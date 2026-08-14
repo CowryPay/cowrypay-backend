@@ -159,6 +159,11 @@ const CorrectSendStateSchema = z.object({
   ]),
   note: z.string().min(1),
   actor: z.string().min(1),
+  // Optional — for correcting a stale/wrong tx hash (real incident: a
+  // payout broadcast that silently never reached the network left a
+  // withdrawTxHash on the row for a transaction that doesn't exist,
+  // requiring a re-broadcast and a correction to the real hash).
+  withdrawTxHash: z.string().min(1).optional(),
 });
 
 // Real incident that motivated this: centiivSettlementPoller.ts treats
@@ -192,7 +197,7 @@ adminRouter.post("/admin/sends/:id/correct-state", async (req: Request, res: Res
 
   const nextState = parsed.data.state as SendState;
   await withTransaction(async (client) => {
-    await sendsRepo.updateState(client, send.id, { state: nextState });
+    await sendsRepo.updateState(client, send.id, { state: nextState, withdrawTxHash: parsed.data.withdrawTxHash });
     await sendsRepo.logTransition(
       client,
       send.id,
