@@ -270,3 +270,55 @@ adminRouter.get("/admin/wallets/:address/diagnostic", async (req: Request, res: 
   ]);
   res.json({ userId: wallet.userId, walletAddress: wallet.address, balances, sends, deposits });
 });
+
+const AdjustLedgerSchema = z.object({
+  chain: z.string().min(1),
+  tokenSymbol: z.string().min(1),
+  amount: z.string().min(1),
+  direction: z.enum(["credit", "debit"]),
+  note: z.string().min(1),
+  actor: z.string().min(1),
+});
+
+// Real incident that motivated this: a provider refund landing directly
+// in a user's own AWS-KMS wallet is indistinguishable from an ordinary
+// deposit to the deposit scanner, so the same on-chain transfer got
+// credited twice — once via the send's own REFUNDED transition, once via
+// the scanner picking it up as new money (confirmed by an exact tx-hash
+// match between the "deposit" and the provider's own refund transaction).
+// No dedicated ledger-adjustment table exists — logged to console (same
+// as every other admin correction this session) with a required note/
+// actor, not silently applied.
+adminRouter.post("/admin/wallets/:address/adjust-ledger", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = AdjustLedgerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const wallet = await walletsRepo.findByAddress(req.params.address);
+  if (!wallet) {
+    res.status(404).json({ error: "no wallet found for this address" });
+    return;
+  }
+
+  const { chain, tokenSymbol, amount, direction, note, actor } = parsed.data;
+  console.log(
+    `[admin] ledger adjustment: user ${wallet.userId} ${direction} ${amount} ${tokenSymbol} on ${chain} — actor=${actor}, note="${note}"`,
+  );
+
+  try {
+    const balance = await withTransaction(async (client) => {
+      if (direction === "credit") {
+        return ledgerRepo.creditAvailable(client, wallet.userId, tokenSymbol, chain, amount);
+      }
+      const result = await ledgerRepo.debitAvailable(client, wallet.userId, tokenSymbol, chain, amount);
+      if (!result) throw new Error("insufficient available balance for this debit");
+      return result;
+    });
+    res.json({ ok: true, balance });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
