@@ -123,6 +123,29 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       : null;
 
   const reference = reusable?.reference ?? randomUUID();
+
+  // Real bug found live: a payout failure (e.g. PayoutLiquidityError, the
+  // payout wallet itself short on USDC) correctly refunds the ledger and
+  // marks that send FAILED, but does nothing to stop a client from
+  // retrying with the SAME still-unexpired chat-locked order — which
+  // reuses this same `reference`. sendsRepo.create's unique constraint on
+  // reference then throws a raw, unhandled Postgres error straight through
+  // to the user ("duplicate key value violates unique constraint
+  // sends_reference_key") instead of a message that explains anything.
+  // Checked before debiting the ledger again, not after, so a doomed
+  // retry never touches the user's balance at all.
+  if (reusable) {
+    const existing = await sendsRepo.findByReference(reference);
+    if (existing) {
+      if (existing.state === "FAILED" || existing.state === "REFUNDED") {
+        throw new Error(
+          "This transfer already failed on a previous attempt and can't be retried with the same quote — please start a new send.",
+        );
+      }
+      throw new Error("This transfer is already being processed — please wait a moment before trying again.");
+    }
+  }
+
   // Recomputed fresh even when reusing a chat-locked order — computeFeeSplit
   // is a pure function of amount + the fee bps, so this reproduces the exact
   // net amount Paycrest's order was created with (LockedOrder doesn't carry
