@@ -15,6 +15,36 @@ import { createOfframpOrder as createCentiivOrder } from "./centiivAdapter.js";
 import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
 import { isPaycrestEligible, type OfframpProvider } from "./providerSelection.js";
+import { getReceiptStatus } from "../wallets/receiptStatus.js";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const CONFIRM_POLL_INTERVAL_MS = 3_000;
+const CONFIRM_MAX_ATTEMPTS = 20; // ~60s — comfortable margin over normal Base/Celo/Optimism confirmation times
+
+// Self-broadcast EVM payouts (aws-kms) return immediately after
+// broadcasting, before any confirmation — a deliberate design (see
+// awsKmsAdapter.ts's own comment on avoiding a double-spend bug from
+// waiting synchronously inside withdraw() itself). Real incident this
+// closes: a payout's broadcast silently never reached the network at all
+// (eth_getTransactionByHash returned null ~2 hours later), yet the send
+// still moved to PAYOUT_INITIATED and the platform fee was swept as if it
+// had succeeded — undetected until a user reported funds not arriving.
+// Only meaningful for EVM chains reachable via getReceiptStatus; Stellar/
+// Solana's own withdraw() already waits for real confirmation before
+// returning at all, and Blockradar-custodied payouts confirm via their
+// own webhook (routes/blockradarWebhook.ts), a different mechanism this
+// doesn't need to duplicate.
+async function waitForEvmPayoutConfirmation(chain: string, txHash: string): Promise<"success" | "reverted" | "unconfirmed"> {
+  for (let attempt = 0; attempt < CONFIRM_MAX_ATTEMPTS; attempt++) {
+    const status = await getReceiptStatus(chain, txHash);
+    if (status === "success" || status === "reverted") return status;
+    await sleep(CONFIRM_POLL_INTERVAL_MS);
+  }
+  return "unconfirmed";
+}
 
 // Carried over from a chat draft (domain/chat/remittanceDraft.ts), which
 // already locked a real rate/receive address (against the net amount, after
@@ -273,6 +303,55 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     throw new Error(
       `Could not broadcast the payout (${err instanceof Error ? err.message : String(err)}) — the send was marked failed.`,
     );
+  }
+
+  // Closes the gap that let a Base payout's broadcast silently never
+  // reach the network at all — undetected for ~2 hours, with the fee
+  // swept as if it had succeeded, until a user reported funds not
+  // arriving. Waits for a real on-chain outcome before this send is ever
+  // treated as done. See waitForEvmPayoutConfirmation's own comment for
+  // why this is scoped to aws-kms only.
+  if (wallet.provider === "aws-kms" && payout.txHash) {
+    const confirmation = await waitForEvmPayoutConfirmation(chain, payout.txHash);
+
+    if (confirmation === "reverted") {
+      await withTransaction(async (client) => {
+        await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
+        await sendsRepo.updateState(client, updated.id, { state: "FAILED", withdrawTxHash: payout.txHash });
+        await sendsRepo.logTransition(
+          client,
+          updated.id,
+          "ORDER_CREATED",
+          "FAILED",
+          `payout_reverted_onchain:${payout.txHash}`,
+        );
+      });
+      throw new Error(
+        "The payout transaction reverted on-chain — the send was marked failed and your balance was refunded.",
+      );
+    }
+
+    if (confirmation === "unconfirmed") {
+      // Deliberately NOT marked FAILED (it may still land later — the
+      // Base incident's original broadcast never did, but that's not
+      // guaranteed in general) and NOT credited back (same reason) — left
+      // in ORDER_CREATED with a clear breadcrumb for manual follow-up
+      // instead of guessing either way. Surfaces immediately in
+      // /admin/sends as a non-terminal send, rather than silently
+      // sweeping a fee for a payout nobody has verified actually happened.
+      await withTransaction((client) =>
+        sendsRepo.logTransition(
+          client,
+          updated.id,
+          "ORDER_CREATED",
+          "ORDER_CREATED",
+          `payout_broadcast_unconfirmed:${payout.txHash}`,
+        ),
+      );
+      throw new Error(
+        `We're still waiting for your transfer to confirm on-chain — this needs a quick manual check before it can complete. Please contact support with reference ${reference}.`,
+      );
+    }
   }
 
   const final = await withTransaction(async (client) => {
