@@ -110,6 +110,11 @@ export interface AdminSendDiagnostic {
   // "fee_sweep_failed: <error>") — null means the fee-sweep step was never
   // reached at all (e.g. the payout itself failed before getting there).
   feeSweepTrigger: string | null;
+  // Needed to look a stuck send up directly against the provider's own API
+  // (e.g. Paycrest's GET /sender/orders/:id) — without it, diagnosing a
+  // "stuck" send means guessing which of the provider's own orders it
+  // corresponds to.
+  providerOrderId: string | null;
 }
 
 // One-shot cross-user aggregate read for the admin overview dashboard —
@@ -381,7 +386,7 @@ export const adminRepo = {
   async listRecentSends(chain: string | undefined, limit: number): Promise<AdminSendDiagnostic[]> {
     const { rows } = await pool.query(
       `select s.id, s.chain, s.provider, s.amount_human, s.fee_amount, s.treasury_address, s.state,
-              s.withdraw_tx_hash, s.created_at,
+              s.withdraw_tx_hash, s.created_at, s.provider_order_id,
               (
                 select t.trigger from send_state_transitions t
                 where t.send_id = s.id and t.trigger like 'fee_swe%'
@@ -416,6 +421,7 @@ export const adminRepo = {
       settlementTrigger: r.settlement_trigger,
       createdAt: r.created_at,
       feeSweepTrigger: r.fee_sweep_trigger,
+      providerOrderId: r.provider_order_id,
     }));
   },
 };
