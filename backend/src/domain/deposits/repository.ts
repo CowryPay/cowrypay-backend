@@ -48,6 +48,14 @@ export const depositsRepo = {
     return rows[0] ? mapDeposit(rows[0]) : null;
   },
 
+  async listForUser(userId: string, limit: number): Promise<Deposit[]> {
+    const { rows } = await pool.query(`select * from deposits where user_id = $1 order by created_at desc limit $2`, [
+      userId,
+      limit,
+    ]);
+    return rows.map(mapDeposit);
+  },
+
   // Relies on the (chain, tx_hash) unique constraint for idempotency — a
   // retried webhook delivery for the same deposit returns null here instead
   // of creating a duplicate.

@@ -12,6 +12,7 @@ import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
 import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
 import { ledgerRepo } from "../domain/ledger/repository.js";
+import { depositsRepo } from "../domain/deposits/repository.js";
 
 export const adminRouter = Router();
 
@@ -262,9 +263,10 @@ adminRouter.get("/admin/wallets/:address/diagnostic", async (req: Request, res: 
     res.status(404).json({ error: "no wallet found for this address" });
     return;
   }
-  const [balances, sends] = await Promise.all([
+  const [balances, sends, deposits] = await Promise.all([
     ledgerRepo.getBalancesForUser(wallet.userId),
     adminRepo.listSendsForUser(wallet.userId, 50),
+    depositsRepo.listForUser(wallet.userId, 50),
   ]);
-  res.json({ userId: wallet.userId, walletAddress: wallet.address, balances, sends });
+  res.json({ userId: wallet.userId, walletAddress: wallet.address, balances, sends, deposits });
 });
