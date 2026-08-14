@@ -32,15 +32,35 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
   const fromBlock = cursor != null ? cursor + 1n : safeLatest;
   if (fromBlock > safeLatest) return; // nothing new yet
 
-  const toBlock = fromBlock + MAX_BLOCK_RANGE < safeLatest ? fromBlock + MAX_BLOCK_RANGE : safeLatest;
+  let toBlock = fromBlock + MAX_BLOCK_RANGE < safeLatest ? fromBlock + MAX_BLOCK_RANGE : safeLatest;
 
-  const logs = await client.getLogs({
-    address: usdcAddress,
-    event: TRANSFER_EVENT,
-    args: { to: wallets.map((w) => w.address as `0x${string}`) },
-    fromBlock,
-    toBlock,
-  });
+  // Real incident: MAX_BLOCK_RANGE (2000) assumes the RPC can handle wide
+  // getLogs queries, but Alchemy's free tier enforces just 10 blocks —
+  // once Celo's cursor fell even slightly behind, every cycle requested
+  // more than that and failed, the cursor never advanced, and the
+  // requested range only grew from there. A permanent stuck loop, not a
+  // transient blip — it could never recover on its own. Halves the range
+  // and retries on any getLogs failure instead of trusting a fixed
+  // constant across every provider/chain/plan, so it self-heals to
+  // whatever the real limit actually is rather than needing that limit
+  // hardcoded (which would just as fragilely break again if it ever
+  // changes, or differs for Base/Optimism on the same Alchemy account).
+  let logs;
+  for (;;) {
+    try {
+      logs = await client.getLogs({
+        address: usdcAddress,
+        event: TRANSFER_EVENT,
+        args: { to: wallets.map((w) => w.address as `0x${string}`) },
+        fromBlock,
+        toBlock,
+      });
+      break;
+    } catch (err) {
+      if (toBlock <= fromBlock) throw err; // already as narrow as possible — a real failure, not a range problem
+      toBlock = fromBlock + (toBlock - fromBlock) / 2n;
+    }
+  }
 
   // Cursor only advances if every log in this range is successfully
   // ingested — a transient failure partway through means the whole range
