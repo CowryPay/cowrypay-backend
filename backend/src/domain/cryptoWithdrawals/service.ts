@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseUnits } from "viem";
 import { withTransaction } from "../../db/pool.js";
 import { env } from "../../config/env.js";
 import type { CryptoWithdrawal } from "../../types.js";
@@ -11,6 +12,8 @@ import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { cryptoWithdrawalsRepo } from "./repository.js";
 import { isValidAddressForChain } from "./addressValidation.js";
+import { readUsdcBalance, sweepWallet } from "../wallets/depositSweeper.js";
+import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 
 export interface InitiateCryptoWithdrawalInput {
   chain: string;
@@ -92,6 +95,54 @@ export async function initiateCryptoWithdrawal(
     await cryptoWithdrawalsRepo.logTransition(client, created.id, null, "PENDING", "withdrawal_requested");
     return created;
   });
+
+  // Secondary backstop only, aws-kms EVM chains — mirrors offramp/
+  // service.ts's own just-in-time sweep (see its comment for the full
+  // reasoning). The real, structural fix is deposits/stateMachine.ts's
+  // triggerSweepAfterCredit, which sweeps every deposit into the shared
+  // payout pool the instant it's credited; this just covers anything
+  // credited before that fix existed, or a case where that sweep attempt
+  // itself failed. Does nothing for a shortfall bigger than this one
+  // user's own deposit — that's correctly not this function's job.
+  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(input.chain) && env.awsKmsPayoutKeyArn) {
+    try {
+      const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
+      const needed = parseUnits(input.amount, 6);
+      const payoutBalance = await readUsdcBalance(input.chain, payoutAddress);
+      if (payoutBalance < needed) {
+        console.log(
+          `[crypto-withdrawal] payout wallet short on ${input.chain} for withdrawal ${withdrawal.id} (have ${payoutBalance}, need ${needed}) — attempting just-in-time sweep of ${wallet.address}`,
+        );
+        const swept = await sweepWallet(
+          input.chain,
+          { externalWalletId: wallet.externalWalletId, address: wallet.address as `0x${string}` },
+          { keyArn: env.awsKmsPayoutKeyArn, address: payoutAddress },
+        );
+        console.log(
+          `[crypto-withdrawal] just-in-time sweep for withdrawal ${withdrawal.id}: ${swept ? "broadcast" : "skipped (nothing to sweep, or gas top-up unconfirmed)"}`,
+        );
+
+        // sweepWallet only broadcasts — the very next step is attempting
+        // the payout, so this needs to actually wait for the swept USDC
+        // to land, or the immediate retry would just hit the same
+        // shortfall again. Bounded wait, not indefinite: if it hasn't
+        // landed by then, withdraw()'s own liquidity error is the honest
+        // outcome.
+        if (swept) {
+          for (let attempt = 0; attempt < 10; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 3_000));
+            const updatedBalance = await readUsdcBalance(input.chain, payoutAddress);
+            if (updatedBalance >= needed) break;
+          }
+        }
+      }
+    } catch (err) {
+      // Best-effort — any failure here just falls through to the normal
+      // withdraw() attempt below, which surfaces its own accurate
+      // liquidity error if the sweep genuinely didn't help.
+      console.error(`[crypto-withdrawal] just-in-time sweep check failed for withdrawal ${withdrawal.id}:`, err);
+    }
+  }
 
   let payout;
   try {
