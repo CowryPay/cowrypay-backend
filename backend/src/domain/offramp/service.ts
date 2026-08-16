@@ -272,17 +272,19 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     return next;
   });
 
-  // Just-in-time liquidity check, aws-kms EVM chains only — real incident:
-  // a user's own deposit sat unswept in their individual wallet for days
-  // (the periodic background sweeper's gas top-up silently never
-  // confirmed within its wait window, and that specific failure path
-  // logged nothing at all), while their ledger balance correctly showed
-  // the funds as spendable — so every send attempt failed with a
-  // liquidity error even though the money was right there, one sweep
-  // away. Rather than depend entirely on that background job's timing,
-  // check whether the shared payout wallet can actually cover this send
-  // and, if not, try sweeping the user's OWN wallet in on the spot before
-  // falling through to withdraw()'s normal (accurate) liquidity error.
+  // Secondary backstop only, aws-kms EVM chains — the real, structural
+  // fix is deposits/stateMachine.ts's triggerSweepAfterCredit, which
+  // sweeps every deposit into the shared payout pool the instant it's
+  // credited (matching how Blockradar's master wallet has auto-sweep
+  // enabled), so liquidity for any user's off-ramp doesn't depend on
+  // which specific user happens to have an unswept deposit at that
+  // moment. This just covers the gap for anything credited before that
+  // fix existed, or a case where that sweep attempt itself failed —
+  // checks whether the shared payout wallet can cover this send and, if
+  // not, makes one more attempt at sweeping the CURRENT user's own wallet
+  // before falling through to withdraw()'s normal (accurate) liquidity
+  // error. Does nothing for a shortfall bigger than this one user's own
+  // deposit — that's correctly not this function's job.
   if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
