@@ -43,6 +43,15 @@ export interface SweepableWallet {
   address: string;
 }
 
+// Shared with offramp/service.ts's just-in-time sweep check — same ABI,
+// same "read a USDC balance" need, kept here instead of duplicated since
+// this file already owns the ERC20 ABI for the sweep transfer itself.
+export async function readUsdcBalance(chain: string, address: `0x${string}`): Promise<bigint> {
+  const { viemChain, rpcUrl, usdcAddress } = getChainConfig(chain);
+  const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
+  return publicClient.readContract({ address: usdcAddress, abi: ERC20_ABI, functionName: "balanceOf", args: [address] });
+}
+
 // Kept separate from the listByProvider/DB orchestration below so it can be
 // exercised directly against a real wallet without needing a live DB row —
 // mirrors how receiptStatus.ts's getReceiptStatus was kept independent in
@@ -97,7 +106,13 @@ export async function sweepWallet(chain: string, wallet: SweepableWallet, payout
     if (!confirmed) {
       // Nothing lost — the native token already sent (if any) is still at
       // the address, so next cycle proceeds straight to the sweep instead
-      // of topping up again.
+      // of topping up again. Logged, though — this exact silent path
+      // (return false, zero log output) was found live to be why a real
+      // user's deposit sat unswept indefinitely with no error anywhere to
+      // find: a top-up that never confirms just retries forever, invisibly.
+      console.error(
+        `[deposit-sweeper] gas top-up for ${address} on ${chain} (tx ${topUpHash}) didn't confirm within ${TOPUP_CONFIRM_ATTEMPTS * TOPUP_CONFIRM_DELAY_MS}ms — will retry next cycle.`,
+      );
       return false;
     }
   }

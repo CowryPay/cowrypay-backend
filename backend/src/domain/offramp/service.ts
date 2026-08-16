@@ -16,6 +16,9 @@ import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
 import { isPaycrestEligible, type OfframpProvider } from "./providerSelection.js";
 import { getReceiptStatus } from "../wallets/receiptStatus.js";
+import { readUsdcBalance, sweepWallet } from "../wallets/depositSweeper.js";
+import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
+import { parseUnits } from "viem";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -268,6 +271,56 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     );
     return next;
   });
+
+  // Just-in-time liquidity check, aws-kms EVM chains only — real incident:
+  // a user's own deposit sat unswept in their individual wallet for days
+  // (the periodic background sweeper's gas top-up silently never
+  // confirmed within its wait window, and that specific failure path
+  // logged nothing at all), while their ledger balance correctly showed
+  // the funds as spendable — so every send attempt failed with a
+  // liquidity error even though the money was right there, one sweep
+  // away. Rather than depend entirely on that background job's timing,
+  // check whether the shared payout wallet can actually cover this send
+  // and, if not, try sweeping the user's OWN wallet in on the spot before
+  // falling through to withdraw()'s normal (accurate) liquidity error.
+  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain) && env.awsKmsPayoutKeyArn) {
+    try {
+      const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
+      const needed = parseUnits(netAmount, 6);
+      const payoutBalance = await readUsdcBalance(chain, payoutAddress);
+      if (payoutBalance < needed) {
+        console.log(
+          `[offramp] payout wallet short on ${chain} for send ${updated.id} (have ${payoutBalance}, need ${needed}) — attempting just-in-time sweep of ${walletAddress}`,
+        );
+        const swept = await sweepWallet(
+          chain,
+          { externalWalletId: wallet.externalWalletId, address: walletAddress },
+          { keyArn: env.awsKmsPayoutKeyArn, address: payoutAddress },
+        );
+        console.log(`[offramp] just-in-time sweep for send ${updated.id}: ${swept ? "broadcast" : "skipped (nothing to sweep, or gas top-up unconfirmed)"}`);
+
+        // sweepWallet only broadcasts (same "broadcast and move on" stance
+        // as withdraw() itself — see its own comment) — the very next step
+        // here is attempting the payout, so unlike the periodic background
+        // sweeper this needs to actually wait for the swept USDC to land,
+        // or the immediate retry below would just hit the same shortfall
+        // again. Bounded wait, not indefinite: if it hasn't landed by
+        // then, withdraw()'s own liquidity error is the honest outcome.
+        if (swept) {
+          for (let attempt = 0; attempt < 10; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 3_000));
+            const updatedBalance = await readUsdcBalance(chain, payoutAddress);
+            if (updatedBalance >= needed) break;
+          }
+        }
+      }
+    } catch (err) {
+      // Best-effort — any failure here just falls through to the normal
+      // withdraw() attempt below, which surfaces its own accurate
+      // liquidity error if the sweep genuinely didn't help.
+      console.error(`[offramp] just-in-time sweep check failed for send ${updated.id}:`, err);
+    }
+  }
 
   let payout;
   try {
