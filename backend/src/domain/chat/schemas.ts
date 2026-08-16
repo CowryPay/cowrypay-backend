@@ -22,6 +22,19 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("admin"),
     action: z.enum(["BALANCE", "TX_HISTORY", "HELP", "CHAT"]),
   }),
+  // Deliberately recognized-but-not-fulfilled in chat — see
+  // routes/cryptoWithdrawals.ts's own comment on why sending crypto to an
+  // external wallet stays REST-only: a wrong destination address here is
+  // unrecoverable money loss, unlike a wrong bank detail on a remittance
+  // send, and an LLM extracting an address from free text is exactly the
+  // wrong place to introduce that risk. This intent exists only so chat
+  // can tell such a request apart from a remittance/off-ramp send and
+  // reply correctly, instead of misreading "withdraw to wallet" as
+  // SEND_REMITTANCE and producing a nonsensical off-ramp error.
+  z.object({
+    kind: z.literal("cryptoWithdrawal"),
+    action: z.literal("WITHDRAW_TO_WALLET"),
+  }),
   z.object({
     kind: z.literal("unknown"),
     rawSummary: z.string(),

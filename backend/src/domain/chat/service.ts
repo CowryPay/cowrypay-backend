@@ -184,6 +184,21 @@ export async function handleChatMessage(userId: string, message: string): Promis
     // action === "CHAT" falls through to the conversational reply below.
   }
 
+  // Real bug this closes: before this intent existed, "withdraw to wallet"
+  // had nothing better to match than SEND_REMITTANCE (off-ramp), which
+  // then failed with a confusing, wrong error (Paycrest's own small-amount
+  // rejection) for a request that was never an off-ramp at all. Sending
+  // crypto to an external wallet stays REST-only by design — see
+  // routes/cryptoWithdrawals.ts's own comment on why an LLM should never
+  // extract a destination address from free text — so this only ever
+  // recognizes the request and points the user at the real flow.
+  if (parsed?.kind === "cryptoWithdrawal") {
+    return {
+      reply:
+        "Withdrawing crypto to an external wallet isn't available here in chat — head to the Withdraw screen in the app to send USDC to a wallet address directly.",
+    };
+  }
+
   // Genuinely unmatched (or parser unavailable/errored) — free-form reply.
   // No account-data access at all, so even a manipulated reply here can't
   // leak a real balance or address; those only ever come from the
