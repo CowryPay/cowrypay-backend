@@ -198,19 +198,53 @@ adminRouter.post("/admin/sends/:id/correct-state", async (req: Request, res: Res
   }
 
   const nextState = parsed.data.state as SendState;
-  await withTransaction(async (client) => {
-    await sendsRepo.updateState(client, send.id, { state: nextState, withdrawTxHash: parsed.data.withdrawTxHash });
-    await sendsRepo.logTransition(
-      client,
-      send.id,
-      send.state,
-      nextState,
-      `admin_correction: ${parsed.data.note}`,
-      parsed.data.actor,
-    );
-  });
 
-  res.json({ ok: true });
+  // Real incident this closes: reviving a send from FAILED/REFUNDED back
+  // to a live state (exactly what happened when a payout's original
+  // broadcast silently never landed, got auto-refunded by
+  // withdrawConfirmationPoller.ts, and was then corrected here to its
+  // real re-broadcast tx hash) left an earlier auto-refund uncorrected —
+  // the send went on to genuinely complete a second time in effect,
+  // leaving the user with a real phantom credit. Every single code path
+  // in this codebase that sets FAILED or REFUNDED (applyTerminalFailureTransition,
+  // both services' withdraw() catch blocks, withdrawConfirmationPoller.ts's
+  // reverted-detection) does so atomically together with a ledger credit
+  // for send.amountHuman — no exception exists anywhere. So "current
+  // state is FAILED/REFUNDED" reliably means "the user was already
+  // credited," and reviving it to any non-terminal state must reverse
+  // that credit in the same transaction, not leave it to be forgotten a
+  // second time. Refuses to proceed at all if the reversal can't apply
+  // (insufficient balance) rather than silently applying just the state
+  // change and reproducing the exact bug this exists to prevent.
+  const revivingFromCreditedFailure =
+    (send.state === "FAILED" || send.state === "REFUNDED") && nextState !== "FAILED" && nextState !== "REFUNDED";
+
+  try {
+    await withTransaction(async (client) => {
+      if (revivingFromCreditedFailure) {
+        const debited = await ledgerRepo.debitAvailable(client, send.userId, send.tokenSymbol, send.chain, send.amountHuman);
+        if (!debited) {
+          throw new Error(
+            `Cannot revive send ${send.id}: reversing its earlier auto-refund (${send.amountHuman} ${send.tokenSymbol}) would require debiting more than the user's current available balance. Resolve the balance conflict before correcting this send's state.`,
+          );
+        }
+      }
+      await sendsRepo.updateState(client, send.id, { state: nextState, withdrawTxHash: parsed.data.withdrawTxHash });
+      await sendsRepo.logTransition(
+        client,
+        send.id,
+        send.state,
+        nextState,
+        revivingFromCreditedFailure
+          ? `admin_correction (reversed earlier auto-refund of ${send.amountHuman} ${send.tokenSymbol}): ${parsed.data.note}`
+          : `admin_correction: ${parsed.data.note}`,
+        parsed.data.actor,
+      );
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 const StellarTreasuryTransferSchema = z.object({
