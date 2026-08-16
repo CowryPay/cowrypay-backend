@@ -271,6 +271,71 @@ adminRouter.get("/admin/wallets/:address/diagnostic", async (req: Request, res: 
   res.json({ userId: wallet.userId, walletAddress: wallet.address, balances, sends, deposits });
 });
 
+// Real incident that motivated this: the summary-level diagnostic above
+// showed deposits and sends that, added up, should net to a 0 balance on
+// Base for one user — but their actual ledger balance was 9.8. Neither
+// number alone explains it; the exact sequence of ledger-affecting events
+// (which credit/debit happened, in what order, from which trigger) is
+// needed to find where the arithmetic actually breaks — same precision
+// used to nail the Celo double-credit down to an exact tx-hash match,
+// applied here as a general-purpose tool instead of one-off scripting.
+// Merges every send's and deposit's own transition log into one
+// chronological timeline, since a discrepancy like this lives in the
+// ORDER events happened, not just their totals.
+adminRouter.get("/admin/wallets/:address/ledger-audit", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const wallet = await walletsRepo.findByAddress(req.params.address);
+  if (!wallet) {
+    res.status(404).json({ error: "no wallet found for this address" });
+    return;
+  }
+  const chain = typeof req.query.chain === "string" ? req.query.chain : undefined;
+
+  const [sends, deposits] = await Promise.all([
+    adminRepo.listSendsForUser(wallet.userId, 100),
+    depositsRepo.listForUser(wallet.userId, 100),
+  ]);
+  const relevantSends = chain ? sends.filter((s) => s.chain === chain) : sends;
+  const relevantDeposits = chain ? deposits.filter((d) => d.chain === chain) : deposits;
+
+  const sendTimelines = await Promise.all(
+    relevantSends.map(async (s) => ({
+      kind: "send" as const,
+      id: s.id,
+      chain: s.chain,
+      amount: s.amountHuman,
+      transitions: await sendsRepo.getTransitions(s.id),
+    })),
+  );
+  const depositTimelines = await Promise.all(
+    relevantDeposits.map(async (d) => ({
+      kind: "deposit" as const,
+      id: d.id,
+      chain: d.chain,
+      amount: d.amount,
+      transitions: await depositsRepo.getTransitions(d.id),
+    })),
+  );
+
+  const events = [...sendTimelines, ...depositTimelines]
+    .flatMap((entry) =>
+      entry.transitions.map((t) => ({
+        kind: entry.kind,
+        id: entry.id,
+        chain: entry.chain,
+        amount: entry.amount,
+        fromState: t.fromState,
+        toState: t.toState,
+        trigger: t.trigger,
+        actor: t.actor,
+        createdAt: t.createdAt,
+      })),
+    )
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  res.json({ userId: wallet.userId, walletAddress: wallet.address, events });
+});
+
 const AdjustLedgerSchema = z.object({
   chain: z.string().min(1),
   tokenSymbol: z.string().min(1),
