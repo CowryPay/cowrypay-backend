@@ -20,6 +20,26 @@ export const ledgerRepo = {
     return rows.map(mapBalance);
   },
 
+  // What we owe, in total, per chain — the number a treasury dashboard
+  // actually needs alongside the operational wallet's on-chain balance:
+  // "what we hold" only means something next to "what we owe." A chain
+  // where this exceeds the operational balance is under-collateralized
+  // right now, not necessarily a bug — see fee.ts's requireTreasuryAddress
+  // and offramp/service.ts's just-in-time sweep for why the two numbers
+  // can legitimately diverge moment to moment.
+  async getTotalAvailableByChain(tokenSymbol: string): Promise<Record<string, string>> {
+    const { rows } = await pool.query(
+      `select chain, coalesce(sum(available_balance), 0) as total
+       from ledger_balances
+       where token_symbol = $1
+       group by chain`,
+      [tokenSymbol],
+    );
+    const result: Record<string, string> = {};
+    for (const row of rows) result[row.chain] = row.total;
+    return result;
+  },
+
   // Atomic upsert-increment — the addition happens in SQL, never in JS, so
   // floating-point arithmetic never touches money. Keyed on (user, token,
   // chain) since USDC on one chain isn't spendable on another — see the

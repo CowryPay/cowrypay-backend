@@ -6,6 +6,7 @@ import { env } from "../../config/env.js";
 import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getSolanaTreasurySigner } from "../wallets/solanaKms.js";
+import { ledgerRepo } from "../ledger/repository.js";
 
 const ERC20_BALANCE_ABI = [
   {
@@ -108,6 +109,13 @@ export interface TreasurySnapshot {
   // into it until a user reported the error. This is the dashboard's
   // early-warning view into that same class of problem.
   operational: WalletBalance[];
+  // What we owe users, in total, per chain — "operational" only means
+  // something read next to this. A chain where totalLedgerLiability
+  // exceeds operational's balance is under-collateralized right now: real
+  // user balances that the shared payout wallet can't actually cover yet
+  // (normal in the moment sweeping/liquidity lags a deposit, a genuine
+  // problem if it persists).
+  totalLedgerLiability: Record<string, string>;
 }
 
 export async function getTreasurySnapshot(): Promise<TreasurySnapshot> {
@@ -148,5 +156,7 @@ export async function getTreasurySnapshot(): Promise<TreasurySnapshot> {
     safeBalance("solana", solanaTreasuryAddress, () => solanaBalance(solanaTreasuryAddress!, true)),
   ]);
 
-  return { feeTreasury, operational };
+  const totalLedgerLiability = await ledgerRepo.getTotalAvailableByChain(env.defaultTokenSymbol);
+
+  return { feeTreasury, operational, totalLedgerLiability };
 }
