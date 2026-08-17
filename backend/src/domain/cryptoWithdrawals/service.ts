@@ -29,7 +29,7 @@ export interface InitiateCryptoWithdrawalInput {
 // chains (celo/base/optimism) share one wallet row keyed under
 // env.defaultChain (one KMS/Blockradar address valid on all three); Stellar
 // and Solana each have their own dedicated row.
-function walletChainKeyFor(chain: string): string {
+export function walletChainKeyFor(chain: string): string {
   const c = chain.toLowerCase();
   if (c === "stellar") return "stellar";
   if (c === "solana") return "solana";

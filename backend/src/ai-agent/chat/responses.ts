@@ -168,6 +168,7 @@ export function buildHelpMessage(): string {
     `• "I want to deposit" — get your deposit address for a specific chain (${formatChainList(DEPOSIT_CHAINS, "or")})`,
     `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
+    `• "Withdraw 20 USDC to 0x... on Base" — send crypto to an external wallet address`,
     `• "My transactions" — see your recent activity`,
     "",
     `Need a real person? Reach us on Telegram: https://t.me/+OV3fAjsqmrtlZmY8`,

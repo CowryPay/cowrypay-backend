@@ -18,7 +18,13 @@ import {
 } from "../../ai-agent/chat/responses.js";
 import { createGroqClient, generateChatReply, parseWithLlm } from "./llm.js";
 import { mergeRemittanceDrafts, resolveRemittanceIntent, type RemittanceDraft, type RemittanceIntent } from "./remittanceDraft.js";
-import { clearSession, getActiveSession, saveSession, touchSession } from "./sessionRepository.js";
+import {
+  mergeCryptoWithdrawalDrafts,
+  resolveCryptoWithdrawalIntent,
+  type CryptoWithdrawalDraft,
+  type CryptoWithdrawalIntent,
+} from "./cryptoWithdrawalDraft.js";
+import { clearSession, getActiveSession, saveSession, touchSession, type ChatDraftIntent } from "./sessionRepository.js";
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -37,6 +43,11 @@ export interface ChatResult {
   // dedicated flow, and submits it to POST /offramp/sends. Chat never calls
   // that itself: a message alone must never be sufficient to move money (§9).
   pendingSend?: RemittanceDraft;
+  // Same §9 boundary, second money-moving flow — the frontend must show
+  // the full destination address back to the user for explicit review
+  // (see cryptoWithdrawalDraft.ts's own comment on why) before collecting
+  // the PIN and submitting to POST /crypto-withdrawals itself.
+  pendingCryptoWithdrawal?: CryptoWithdrawalDraft;
 }
 
 // Gives the LLM the fields already captured from earlier messages, so a bare
@@ -50,6 +61,15 @@ function buildFollowUpPrompt(draft: RemittanceIntent, message: string): string {
   if (draft.accountIdentifier) known.push(`account: ${draft.accountIdentifier}`);
   const knownStr = known.length ? `Already known about this pending send: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this send request: "${message}"`;
+}
+
+function buildCryptoWithdrawalFollowUpPrompt(draft: CryptoWithdrawalIntent, message: string): string {
+  const known: string[] = [];
+  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.toAddress) known.push(`destination address: ${draft.toAddress}`);
+  if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
+  const knownStr = known.length ? `Already known about this pending wallet withdrawal: ${known.join(", ")}. ` : "";
+  return `${knownStr}The user's new message, possibly continuing this withdrawal request: "${message}"`;
 }
 
 export async function handleChatMessage(userId: string, message: string): Promise<ChatResult> {
@@ -148,15 +168,34 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   // activeDraft was already fetched up front — only expired-or-absent
   // sessions come back null (see sessionRepository.ts's idle-timeout check).
-  const llmInput = activeDraft ? buildFollowUpPrompt(activeDraft, message) : message;
+  // Which follow-up prompt applies depends on which KIND of draft is
+  // active — a bare "20 USDC" means something different mid-remittance
+  // (an amount to send) vs. mid-withdrawal (an amount to withdraw), so
+  // the wrong builder would misdirect the LLM.
+  const llmInput = !activeDraft
+    ? message
+    : activeDraft.kind === "remittance"
+      ? buildFollowUpPrompt(activeDraft, message)
+      : buildCryptoWithdrawalFollowUpPrompt(activeDraft, message);
   const parsed = await parseWithLlm(groq, llmInput).catch(() => null);
 
   if (parsed?.kind === "remittance") {
-    const merged = activeDraft ? mergeRemittanceDrafts(activeDraft, parsed) : parsed;
+    const merged = activeDraft?.kind === "remittance" ? mergeRemittanceDrafts(activeDraft, parsed) : parsed;
     const resolution = await resolveRemittanceIntent(userId, merged);
     if (resolution.ok) {
       await clearSession(userId);
       return { reply: resolution.summary, pendingSend: resolution.draft };
+    }
+    await saveSession(userId, merged);
+    return { reply: resolution.message };
+  }
+
+  if (parsed?.kind === "cryptoWithdrawal") {
+    const merged = activeDraft?.kind === "cryptoWithdrawal" ? mergeCryptoWithdrawalDrafts(activeDraft, parsed) : parsed;
+    const resolution = await resolveCryptoWithdrawalIntent(userId, merged);
+    if (resolution.ok) {
+      await clearSession(userId);
+      return { reply: resolution.summary, pendingCryptoWithdrawal: resolution.draft };
     }
     await saveSession(userId, merged);
     return { reply: resolution.message };
@@ -182,21 +221,6 @@ export async function handleChatMessage(userId: string, message: string): Promis
       return { reply: buildHelpMessage() };
     }
     // action === "CHAT" falls through to the conversational reply below.
-  }
-
-  // Real bug this closes: before this intent existed, "withdraw to wallet"
-  // had nothing better to match than SEND_REMITTANCE (off-ramp), which
-  // then failed with a confusing, wrong error (Paycrest's own small-amount
-  // rejection) for a request that was never an off-ramp at all. Sending
-  // crypto to an external wallet stays REST-only by design — see
-  // routes/cryptoWithdrawals.ts's own comment on why an LLM should never
-  // extract a destination address from free text — so this only ever
-  // recognizes the request and points the user at the real flow.
-  if (parsed?.kind === "cryptoWithdrawal") {
-    return {
-      reply:
-        "Withdrawing crypto to an external wallet isn't available here in chat — head to the Withdraw screen in the app to send USDC to a wallet address directly.",
-    };
   }
 
   // Genuinely unmatched (or parser unavailable/errored) — free-form reply.

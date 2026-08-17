@@ -13,10 +13,14 @@ const CreateCryptoWithdrawalSchema = z.object({
   pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
 });
 
-// REST-only by design — unlike the off-ramp send flow, this never goes
-// through the chat assistant. A wrong destination address here is
-// unrecoverable money loss, and an LLM extracting an address from free
-// text is exactly the wrong place to introduce that risk.
+// This endpoint itself is still never called from chat directly — a
+// wrong destination address here is unrecoverable money loss, so chat
+// can build a WITHDRAW_TO_WALLET draft (domain/chat/cryptoWithdrawalDraft.ts)
+// but that draft is only ever a suggestion the frontend must show the
+// user in full, requiring explicit confirmation of the exact address
+// plus a real PIN entry, before it calls this endpoint itself — same §9
+// boundary as an off-ramp send's pendingSend, chat only ever proposes,
+// the app (with the user looking at it) is what actually submits.
 cryptoWithdrawalsRouter.post("/crypto-withdrawals", requireAuth, async (req: Request, res: Response) => {
   const parsed = CreateCryptoWithdrawalSchema.safeParse(req.body);
   if (!parsed.success) {
