@@ -177,7 +177,16 @@ export async function handleChatMessage(userId: string, message: string): Promis
     : activeDraft.kind === "remittance"
       ? buildFollowUpPrompt(activeDraft, message)
       : buildCryptoWithdrawalFollowUpPrompt(activeDraft, message);
-  const parsed = await parseWithLlm(groq, llmInput).catch(() => null);
+  // Real incident this closes: GROQ_MODEL pointed at a model Groq had
+  // fully decommissioned, and this catch swallowed every resulting
+  // failure silently — chat kept working (degrading to the free-form
+  // fallback below), so nothing looked broken until someone tested intent
+  // parsing directly. Logged now so this shows up immediately instead of
+  // silently degrading for an unknown span of time.
+  const parsed = await parseWithLlm(groq, llmInput).catch((err) => {
+    console.error("[chat] intent parsing failed:", err);
+    return null;
+  });
 
   if (parsed?.kind === "remittance") {
     const merged = activeDraft?.kind === "remittance" ? mergeRemittanceDrafts(activeDraft, parsed) : parsed;

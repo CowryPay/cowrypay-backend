@@ -132,7 +132,14 @@ async function resolveInstitutionWithGroq(
       { signal },
     );
     return parseIndexResponse(completion.choices[0]?.message?.content, institutions);
-  } catch {
+  } catch (err) {
+    // Real incident this closes: GROQ_MODEL pointed at a model Groq had
+    // fully decommissioned, and every call site swallowed the failure
+    // silently — nothing showed up anywhere until someone happened to
+    // test it directly. Logged now so a bad model name, an outage, or a
+    // rate limit shows up immediately instead of silently degrading to
+    // Claude/static fallbacks for an unknown span of time.
+    console.error("[llm] Groq institution resolution failed:", err);
     return null;
   }
 }
@@ -156,7 +163,8 @@ async function resolveInstitutionWithClaude(
     );
     const block = msg.content.find((b): b is Anthropic.TextBlock => b.type === "text");
     return parseIndexResponse(block?.text, institutions);
-  } catch {
+  } catch (err) {
+    console.error("[llm] Claude institution resolution failed:", err);
     return null;
   }
 }
@@ -208,8 +216,11 @@ export async function generateChatReply(userMessage: string, signal?: AbortSigna
       );
       const reply = completion.choices[0]?.message?.content?.trim();
       if (reply) return reply;
-    } catch {
-      // fall through to Claude
+    } catch (err) {
+      // Logged, not silent — see resolveInstitutionWithGroq's comment on
+      // the real incident (a decommissioned model) this exists to catch
+      // early next time instead of only noticing once a user complains.
+      console.error("[llm] Groq chat reply failed, falling through to Claude:", err);
     }
   }
 
@@ -227,7 +238,8 @@ export async function generateChatReply(userMessage: string, signal?: AbortSigna
       );
       const block = msg.content.find((b): b is Anthropic.TextBlock => b.type === "text");
       if (block?.text?.trim()) return block.text.trim();
-    } catch {
+    } catch (err) {
+      console.error("[llm] Claude chat reply failed, falling through to static reply:", err);
       // fall through to the static reply below
     }
   }

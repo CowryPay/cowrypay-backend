@@ -29,7 +29,15 @@ export const env = {
   // Only used for the free-form chat fallback — unset means that path
   // degrades to a static reply instead of erroring (see domain/chat/llm.ts).
   groqApiKey: process.env.GROQ_API_KEY,
-  groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+  // llama-3.3-70b-versatile (the old default here) was fully decommissioned
+  // by Groq on 2026-08-16 — every call silently failed and fell through to
+  // Claude/static fallbacks, undetected until traced directly (see
+  // domain/chat/llm.ts's now-added logging on every one of those catches).
+  // openai/gpt-oss-120b is Groq's own recommended replacement, verified
+  // live against the real intent-parsing prompt before switching (a
+  // smaller 20b variant was tried first but failed to reliably produce
+  // valid JSON against this prompt's length).
+  groqModel: process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
   // Fallback only — used when Groq is unavailable/errors, or for intent
   // parsing that needs the stronger model. Unset means no fallback; Groq
   // failures degrade to the static reply, same as before.
