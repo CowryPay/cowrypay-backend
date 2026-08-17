@@ -11,6 +11,8 @@ function mapWithdrawal(row: any): CryptoWithdrawal {
     chain: row.chain,
     amountHuman: row.amount_human,
     toAddress: row.to_address,
+    feeAmount: row.fee_amount,
+    treasuryAddress: row.treasury_address,
     provider: row.provider,
     reference: row.reference,
     withdrawTxHash: row.withdraw_tx_hash,
@@ -48,13 +50,15 @@ export const cryptoWithdrawalsRepo = {
       chain: string;
       amountHuman: string;
       toAddress: string;
+      feeAmount: string;
+      treasuryAddress: string;
       provider: string;
       reference: string;
     },
   ): Promise<CryptoWithdrawal> {
     const { rows } = await client.query(
-      `insert into crypto_withdrawals (user_id, wallet_id, token_symbol, chain, amount_human, to_address, provider, reference)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+      `insert into crypto_withdrawals (user_id, wallet_id, token_symbol, chain, amount_human, to_address, fee_amount, treasury_address, provider, reference)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        returning *`,
       [
         input.userId,
@@ -63,6 +67,8 @@ export const cryptoWithdrawalsRepo = {
         input.chain,
         input.amountHuman,
         input.toAddress,
+        input.feeAmount,
+        input.treasuryAddress,
         input.provider,
         input.reference,
       ],

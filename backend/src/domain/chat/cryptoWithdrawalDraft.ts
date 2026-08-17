@@ -5,6 +5,7 @@ import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
+import { computeCryptoWithdrawalFeeSplit } from "../offramp/fee.js";
 import { SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { env } from "../../config/env.js";
 import { formatAmount } from "../../utils/format.js";
@@ -117,11 +118,22 @@ export async function resolveCryptoWithdrawalIntent(
     };
   }
 
+  // Same split the real POST /crypto-withdrawals endpoint computes — shown
+  // here up front so the fee isn't a surprise at PIN-entry time. A null
+  // split means the amount can't even cover the minimum fee.
+  const split = computeCryptoWithdrawalFeeSplit(amountStr);
+  if (!split) {
+    return {
+      ok: false,
+      message: `${amountStr} ${env.defaultTokenSymbol} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${env.defaultTokenSymbol} fee. Try a larger amount.`,
+    };
+  }
+
   const draft: CryptoWithdrawalDraft = { amount: amountStr, toAddress: intent.toAddress, chain };
 
   return {
     ok: true,
     draft,
-    summary: `Ready to withdraw ${amountStr} ${env.defaultTokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to withdraw ${amountStr} ${env.defaultTokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Fee: ${split.feeAmount} ${env.defaultTokenSymbol} — you'll receive ${split.netAmount} ${env.defaultTokenSymbol}. Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
   };
 }

@@ -133,6 +133,8 @@ export interface CryptoWithdrawal {
   chain: string;
   amountHuman: string;
   toAddress: string;
+  feeAmount: string | null;
+  treasuryAddress: string | null;
   provider: string;
   reference: string;
   withdrawTxHash: string | null;

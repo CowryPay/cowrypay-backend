@@ -12,6 +12,7 @@ import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { cryptoWithdrawalsRepo } from "./repository.js";
 import { isValidAddressForChain } from "./addressValidation.js";
+import { computeCryptoWithdrawalFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { readUsdcBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 
@@ -36,12 +37,12 @@ export function walletChainKeyFor(chain: string): string {
   return env.defaultChain;
 }
 
-// Direct on-chain USDC withdrawal to a user-supplied address — no
-// Paycrest order, no fiat conversion, no platform fee (product decision:
-// crypto-to-crypto withdrawals are fee-free, unlike off-ramp sends). Mirrors
-// offramp/service.ts's initiateSend shape closely (PIN gate, debit-before-
-// broadcast, refund-on-failure) since the money-safety invariants are
-// identical — only the destination and the lack of a Paycrest leg differ.
+// Direct on-chain USDC withdrawal to a user-supplied address — no Paycrest
+// order, no fiat conversion. Was originally fee-free (see migration 0015's
+// own comment); now charges 0.3% via computeCryptoWithdrawalFeeSplit, same
+// "debit the full amount, broadcast the net, sweep the fee separately to
+// treasury" shape offramp/service.ts already uses for sends — only the
+// destination and the lack of a Paycrest leg differ.
 export async function initiateCryptoWithdrawal(
   userId: string,
   input: InitiateCryptoWithdrawalInput,
@@ -72,11 +73,23 @@ export async function initiateCryptoWithdrawal(
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
 
+  // Computed before touching the ledger — a null split (amount too small to
+  // cover the minimum fee) must fail before any balance is debited.
+  const split = computeCryptoWithdrawalFeeSplit(input.amount);
+  if (!split) {
+    throw new Error(
+      `${input.amount} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${env.defaultTokenSymbol} fee.`,
+    );
+  }
+  const { feeAmount, netAmount } = split;
+  const treasuryAddress = await requireTreasuryAddress(input.chain);
+
   const reference = randomUUID();
 
   const withdrawal = await withTransaction(async (client) => {
     // Atomic decrement-with-guard — same double-spend protection as
-    // offramp/service.ts's own debit step.
+    // offramp/service.ts's own debit step. Debits the FULL amount (fee +
+    // net), same "debit gross, broadcast net" shape as off-ramp sends.
     const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, input.chain, input.amount);
     if (!debited) {
       throw new Error("Insufficient balance");
@@ -89,6 +102,8 @@ export async function initiateCryptoWithdrawal(
       chain: input.chain,
       amountHuman: input.amount,
       toAddress: input.toAddress,
+      feeAmount,
+      treasuryAddress,
       provider: wallet.provider,
       reference,
     });
@@ -150,7 +165,7 @@ export async function initiateCryptoWithdrawal(
       chain: input.chain,
       tokenSymbol: env.defaultTokenSymbol,
       toAddress: input.toAddress,
-      amount: input.amount,
+      amount: netAmount,
       reference,
     });
   } catch (err) {
@@ -185,7 +200,7 @@ export async function initiateCryptoWithdrawal(
   // closes that gap for the latter, mirroring withdrawConfirmationPoller.ts.
   const nextState = payout.status === "CONFIRMED" ? "CONFIRMED" : "BROADCAST";
 
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     const next = await cryptoWithdrawalsRepo.updateState(client, withdrawal.id, {
       state: nextState,
       withdrawTxHash: payout.txHash,
@@ -199,4 +214,43 @@ export async function initiateCryptoWithdrawal(
     );
     return next;
   });
+
+  // Best-effort — the user's payout already succeeded above, so a failure
+  // here only means the platform fee didn't reach treasury this time, not
+  // that the withdrawal itself failed. Mirrors offramp/service.ts's own
+  // fee-sweep step exactly. Logged for later manual reconciliation rather
+  // than thrown.
+  if (Number(feeAmount) > 0) {
+    try {
+      const feeSweep = await getWalletAdapter(input.chain, wallet.provider).withdraw({
+        chain: input.chain,
+        tokenSymbol: env.defaultTokenSymbol,
+        toAddress: treasuryAddress,
+        amount: feeAmount,
+        reference: `${reference}-fee`,
+      });
+      await withTransaction((client) =>
+        cryptoWithdrawalsRepo.logTransition(
+          client,
+          result.id,
+          nextState,
+          nextState,
+          feeSweep.txHash ? `fee_swept:${feeSweep.txHash}` : "fee_swept_pending_screening",
+        ),
+      );
+    } catch (err) {
+      console.error(`Fee sweep failed for crypto withdrawal ${result.id}:`, err);
+      await withTransaction((client) =>
+        cryptoWithdrawalsRepo.logTransition(
+          client,
+          result.id,
+          nextState,
+          nextState,
+          `fee_sweep_failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
+  }
+
+  return result;
 }

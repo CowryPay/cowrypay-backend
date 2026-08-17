@@ -17,6 +17,24 @@ export function computeFeeSplit(amount: string): FeeSplit {
   return { feeAmount: String(feeAmount), netAmount: String(netAmount) };
 }
 
+// Same "fee taken from the amount" shape as computeFeeSplit above, so the
+// mental model matches off-ramp sends exactly — the full amount debits
+// the user's balance, only the net actually reaches the destination
+// wallet. The one real difference: a minimum floor, since 0.3% of a small
+// withdrawal rounds to almost nothing — without a floor, a $2 withdrawal
+// would carry a ~$0.006 fee. Returns null (not a thrown error, same
+// stance as ledgerRepo.debitAvailable's insufficient-balance guard) when
+// the amount can't even cover the minimum fee, since that's an expected,
+// user-correctable outcome, not a fault.
+export function computeCryptoWithdrawalFeeSplit(amount: string): FeeSplit | null {
+  const amountNum = Number(amount);
+  const pctFee = Math.round(amountNum * env.cryptoWithdrawalFeeBps) / 10_000;
+  const feeAmount = Math.max(pctFee, Number(env.cryptoWithdrawalMinFeeUsd));
+  if (feeAmount >= amountNum) return null;
+  const netAmount = Math.round((amountNum - feeAmount) * 1_000_000) / 1_000_000;
+  return { feeAmount: String(feeAmount), netAmount: String(netAmount) };
+}
+
 // Chain-aware — a real, live bug until fixed: this used to return one
 // single EVM address (REMITTANCE_TREASURY_ADDRESS) regardless of chain,
 // which is a hex address invalid on Stellar/Solana. Harmless as long as

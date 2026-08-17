@@ -81,6 +81,15 @@ export const env = {
   // domain/offramp/fee.ts, not here.
   remittanceTreasuryAddress: process.env.REMITTANCE_TREASURY_ADDRESS,
   remittanceFeeBps: Number(process.env.REMITTANCE_FEE_BPS ?? 100),
+  // Crypto-to-crypto withdrawals were originally fee-free (see migration
+  // 0015's own comment) — now 0.3% (much lower than the 1% off-ramp fee,
+  // since there's no fiat conversion/provider rail involved), with a
+  // minimum floor so a small withdrawal doesn't carry a near-zero fee.
+  // Reuses the SAME treasury addresses as the off-ramp fee (fee.ts's
+  // requireTreasuryAddress) — both are platform fee revenue, no reason to
+  // route them to separate wallets per chain.
+  cryptoWithdrawalFeeBps: Number(process.env.CRYPTO_WITHDRAWAL_FEE_BPS ?? 30),
+  cryptoWithdrawalMinFeeUsd: process.env.CRYPTO_WITHDRAWAL_MIN_FEE_USD ?? "0.1",
   // Dedicated fee-only treasury addresses for Stellar/Solana — deliberately
   // separate from those chains' own shared deposit/operational treasury
   // (STELLAR_DEPOSIT_ADDRESS, the Solana treasury signer), mirroring how
