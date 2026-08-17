@@ -1,6 +1,8 @@
 import { getOfframpRate as getPaycrestRate, isPaycrestEligible } from "./paycrestAdapter.js";
 import { getOfframpRate as getQuidaxRate, quidaxNetworkFor, QUIDAX_SUPPORTED_FIAT_CURRENCIES } from "./quidaxAdapter.js";
 import { getOfframpRate as getCentiivRate, centiivNetworkFor, CENTIIV_SUPPORTED_FIAT_CURRENCIES } from "./centiivAdapter.js";
+import { getTokenConfig } from "../wallets/chains.js";
+import { getSolanaMint } from "../wallets/solanaAdapter.js";
 
 export { isPaycrestEligible };
 
@@ -38,6 +40,39 @@ export function isCentiivEligible(chain: string, fiatCurrency: string): boolean 
   return centiivNetworkFor(chain) !== null && CENTIIV_SUPPORTED_FIAT_CURRENCIES.has(fiatCurrency.toUpperCase());
 }
 
+// Real gap found live: Paycrest genuinely supports USDT on Base (verified
+// against their real API), but nothing else in this codebase does —
+// chains.ts has no USDT entry for Base at all (no official Tether
+// deployment there, only a disclaimed bridge — see chains.ts's own
+// comment), so a Base+USDT send would fail at initiateSend's own
+// getTokenConfig guard. Without this check, GET /offramp/rate would show
+// a real, inviting quote for a combination that can't actually be sent —
+// checked against the exact same source of truth initiateSend uses, so
+// quoting and sending never disagree about what's actually possible.
+function isTokenSupportedOnChain(chain: string, token: string): boolean {
+  const c = chain.toLowerCase();
+  if (c === "solana") {
+    try {
+      getSolanaMint(token);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (c === "stellar") {
+    // Stellar never got USDT support (out of scope — see chains.ts's own
+    // comment on the Celo/Solana-only decision); its adapter is still
+    // hardcoded to a single USDC trustline.
+    return token.toUpperCase() === "USDC";
+  }
+  try {
+    getTokenConfig(c, token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Queries every eligible provider in parallel and returns whichever gives
 // the user more fiat. A provider erroring out (rate-limited, momentarily
 // down, amount too small for their liquidity) is treated as "not
@@ -51,6 +86,9 @@ export async function selectOfframpProvider(params: {
   token?: string;
 }): Promise<ProviderQuote> {
   const token = params.token ?? "USDC";
+  if (!isTokenSupportedOnChain(params.chain, token)) {
+    throw new Error(`${token} isn't supported on ${params.chain} yet.`);
+  }
   const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain)
     ? getPaycrestRate({
         network: params.chain,
