@@ -7,6 +7,7 @@ import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.j
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
 import { SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { env } from "../../config/env.js";
+import { formatAmount } from "../../utils/format.js";
 import type { ParsedIntent } from "./schemas.js";
 
 const ALL_WITHDRAW_CHAINS = [...EVM_CHAINS.filter((c) => c !== "mock-chain"), "stellar", "solana"];
@@ -106,7 +107,10 @@ export async function resolveCryptoWithdrawalIntent(
   const balances = await ledgerRepo.getBalancesForUser(userId);
   const balance = balances.find((b) => b.chain === chain && b.tokenSymbol === env.defaultTokenSymbol);
   if (!balance || Number(balance.availableBalance) < intent.amount) {
-    const available = balance?.availableBalance ?? "0";
+    // Postgres numeric columns come back full-precision ("0.000000000000000000")
+    // — trimmed for a user-facing message the same way every other balance
+    // display in this codebase already does (see formatAmount's own comment).
+    const available = formatAmount(balance?.availableBalance ?? "0");
     return {
       ok: false,
       message: `You only have ${available} ${env.defaultTokenSymbol} available on ${capitalize(chain)} — that's less than the ${amountStr} you asked to withdraw.`,
