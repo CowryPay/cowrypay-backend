@@ -81,13 +81,14 @@ export interface QuidaxRateQuote {
 
 export async function getOfframpRate(params: {
   network: string;
+  token: string;
   amount: string;
   fiatCurrency: string;
 }): Promise<QuidaxRateQuote> {
   const network = quidaxNetworkFor(params.network);
-  if (!network) throw new Error(`Quidax off-ramp doesn't support chain ${params.network} for USDC`);
+  if (!network) throw new Error(`Quidax off-ramp doesn't support chain ${params.network} for ${params.token}`);
   const query = new URLSearchParams({
-    token: "usdc",
+    token: params.token.toLowerCase(),
     currency: params.fiatCurrency.toLowerCase(),
     token_amount: params.amount,
     token_network: network,
@@ -116,6 +117,7 @@ export interface OfframpRecipient {
 export interface CreateOrderInput {
   amount: string;
   network: string;
+  token: string;
   fiatCurrency: string;
   recipient: OfframpRecipient;
   reference: string;
@@ -138,7 +140,7 @@ export interface CreatedOrder {
 // has something to compare against.
 export async function createOfframpOrder(input: CreateOrderInput): Promise<CreatedOrder> {
   const network = quidaxNetworkFor(input.network);
-  if (!network) throw new Error(`Quidax off-ramp doesn't support chain ${input.network} for USDC`);
+  if (!network) throw new Error(`Quidax off-ramp doesn't support chain ${input.network} for ${input.token}`);
   const { firstName, lastName } = splitName(input.recipient.accountName);
 
   const initiated = await quidaxFetch<{ to_amount: string; from_amount: string; status: string }>(
@@ -146,7 +148,7 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
     {
       method: "POST",
       body: JSON.stringify({
-        from_currency: "usdc",
+        from_currency: input.token.toLowerCase(),
         to_currency: input.fiatCurrency.toLowerCase(),
         from_amount: input.amount,
         network,

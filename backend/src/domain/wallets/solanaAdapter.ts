@@ -30,7 +30,10 @@ import { generateAndEncryptSolanaKeyPair, decryptSolanaSigner, getSolanaTreasury
 // fund a new deposit address — an ops problem, not something a retry fixes.
 const SUPPORT_TELEGRAM_LINK = "https://t.me/+OV3fAjsqmrtlZmY8";
 
-export const USDC_DECIMALS = 6;
+// Shared by both mints we support on Solana — USDC and USDT are both
+// 6-decimal SPL tokens, confirmed live via getTokenSupply for the USDT
+// mint before it was added (see env.ts's own comment on that address).
+export const SOLANA_TOKEN_DECIMALS = 6;
 
 // A new system account needs ~890_880 lamports to be rent-exempt; its USDC
 // Associated Token Account needs ~2_039_280 more (Solana's own official
@@ -41,9 +44,24 @@ export const USDC_DECIMALS = 6;
 const SYSTEM_ACCOUNT_RENT_LAMPORTS = 1_000_000n;
 const ATA_RENT_LAMPORTS = 2_100_000n;
 
-function requireSolanaUsdcMint(): string {
-  if (!env.solanaUsdcMint) throw new Error("SOLANA_USDC_MINT must be set for Solana support");
-  return env.solanaUsdcMint;
+const SOLANA_MINTS: Record<string, () => string | undefined> = {
+  USDC: () => env.solanaUsdcMint,
+  USDT: () => env.solanaUsdtMint,
+};
+
+// Replaces the old single-token requireSolanaUsdcMint — same "throw clearly,
+// don't let a missing/unsupported token silently resolve to nothing" stance,
+// now keyed by symbol so USDT support is additive rather than a special case.
+export function getSolanaMint(tokenSymbol: string): string {
+  const resolver = SOLANA_MINTS[tokenSymbol.toUpperCase()];
+  if (!resolver) {
+    throw new Error(`${tokenSymbol} is not supported on Solana (supported: ${Object.keys(SOLANA_MINTS).join(", ")})`);
+  }
+  const mint = resolver();
+  if (!mint) {
+    throw new Error(`SOLANA_${tokenSymbol.toUpperCase()}_MINT must be set for Solana support`);
+  }
+  return mint;
 }
 
 // Pure string-based decimal-to-base-units conversion, deliberately not
@@ -51,10 +69,10 @@ function requireSolanaUsdcMint(): string {
 // arithmetic for money everywhere else (see utils/format.ts's own comment
 // on the same concern) and there's no reason for Solana amounts to be the
 // exception.
-function parseUsdcAmountToBaseUnits(amount: string): bigint {
+function parseTokenAmountToBaseUnits(amount: string): bigint {
   const [whole, frac = ""] = amount.split(".");
-  const paddedFrac = (frac + "0".repeat(USDC_DECIMALS)).slice(0, USDC_DECIMALS);
-  return BigInt(whole || "0") * 10n ** BigInt(USDC_DECIMALS) + BigInt(paddedFrac || "0");
+  const paddedFrac = (frac + "0".repeat(SOLANA_TOKEN_DECIMALS)).slice(0, SOLANA_TOKEN_DECIMALS);
+  return BigInt(whole || "0") * 10n ** BigInt(SOLANA_TOKEN_DECIMALS) + BigInt(paddedFrac || "0");
 }
 
 function rpcClient() {
@@ -181,34 +199,45 @@ async function registerSolanaWebhookAddress(address: string): Promise<void> {
 // deposit account per user — the opposite of Stellar's shared address, and
 // much closer to how the EVM self-custody chains already work here. Unlike
 // every other chain, a freshly-generated address is NOT immediately
-// deposit-ready: it needs SOL for rent-exemption and a created USDC
-// Associated Token Account before it can actually receive USDC, so
-// createWallet pre-funds both from the treasury before returning.
+// deposit-ready: it needs SOL for rent-exemption and a created Associated
+// Token Account per token before it can actually receive it, so
+// createWallet pre-funds all of that from the treasury before returning —
+// both USDC's and USDT's ATA, not just USDC's, so a USDT deposit lands
+// cleanly too regardless of whether the sending party's own tooling would
+// have created the destination ATA itself.
 export const solanaWalletAdapter: WalletAdapter = {
   async createWallet({ userId }): Promise<CreatedWallet> {
     void userId; // no per-user tagging mechanism analogous to KMS key tags here — the wallets row itself is the record
     const { address, ciphertext } = await generateAndEncryptSolanaKeyPair();
-    const mint = requireSolanaUsdcMint();
+    const usdcMint = toAddress(getSolanaMint("USDC"));
+    const usdtMint = toAddress(getSolanaMint("USDT"));
 
     const treasury = await getSolanaTreasurySigner();
     const owner = toAddress(address);
-    const [ata] = await findAssociatedTokenPda({ owner, mint: toAddress(mint), tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const [usdcAta] = await findAssociatedTokenPda({ owner, mint: usdcMint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const [usdtAta] = await findAssociatedTokenPda({ owner, mint: usdtMint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
 
     const transferIx = getTransferSolInstruction({
       source: treasury,
       destination: owner,
-      amount: lamports(SYSTEM_ACCOUNT_RENT_LAMPORTS + ATA_RENT_LAMPORTS),
+      amount: lamports(SYSTEM_ACCOUNT_RENT_LAMPORTS + ATA_RENT_LAMPORTS * 2n),
     });
-    const createAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
+    const createUsdcAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
       payer: treasury,
-      ata,
+      ata: usdcAta,
       owner,
-      mint: toAddress(mint),
+      mint: usdcMint,
+    });
+    const createUsdtAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
+      payer: treasury,
+      ata: usdtAta,
+      owner,
+      mint: usdtMint,
     });
 
     // Must complete before returning — an address that exists but was
     // never pre-funded is exactly the failure mode this whole step exists
-    // to prevent (an incoming USDC transfer to it could fail or behave
+    // to prevent (an incoming transfer to it could fail or behave
     // unpredictably depending on whether the sender's wallet happens to
     // auto-create the recipient's ATA, which nothing guarantees). Throwing
     // here is safe: ensureAccount/ensureStellarWallet's existing
@@ -216,7 +245,7 @@ export const solanaWalletAdapter: WalletAdapter = {
     // this already" cleanly, so a hard failure just surfaces as a clean
     // retry, not a silently broken wallet.
     try {
-      await signAndSendTransaction(treasury, [transferIx, createAtaIx]);
+      await signAndSendTransaction(treasury, [transferIx, createUsdcAtaIx, createUsdtAtaIx]);
     } catch (err) {
       // Seen live: treasury runs low on SOL and the preflight simulation
       // rejects the transfer with "insufficient lamports X, need Y" in its
@@ -252,10 +281,7 @@ export const solanaWalletAdapter: WalletAdapter = {
   // external withdraw destination is never guaranteed to already have USDC
   // support set up, and this codebase has no control over that.
   async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
-    if (input.tokenSymbol.toUpperCase() !== "USDC") {
-      throw new Error(`solana withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
-    }
-    const mint = requireSolanaUsdcMint();
+    const mint = getSolanaMint(input.tokenSymbol);
     const treasury = await getSolanaTreasurySigner();
     const treasuryOwner = toAddress(treasury.address);
     const destinationOwner = toAddress(input.toAddress);
@@ -277,6 +303,19 @@ export const solanaWalletAdapter: WalletAdapter = {
       owner: destinationOwner,
       mint: toAddress(mint),
     });
+    // The treasury's OWN (source) ATA was never idempotently created
+    // anywhere for USDC either — it happened to already exist from manual
+    // bootstrapping when Solana support first launched. USDT's is genuinely
+    // new and has no such history, so this closes that gap for real rather
+    // than relying on another one-off manual step: a no-op (idempotent,
+    // same as the destination's above) once it exists, self-heals on the
+    // very first USDT withdraw/fee-sweep if it doesn't yet.
+    const createTreasuryAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
+      payer: treasury,
+      ata: treasuryAta,
+      owner: treasuryOwner,
+      mint: toAddress(mint),
+    });
 
     // TransferChecked validates mint+decimals explicitly, unlike the plain
     // Transfer instruction — worth the one extra field given a wrong-
@@ -287,8 +326,8 @@ export const solanaWalletAdapter: WalletAdapter = {
       mint: toAddress(mint),
       destination: destinationAta,
       authority: treasury,
-      amount: parseUsdcAmountToBaseUnits(input.amount),
-      decimals: USDC_DECIMALS,
+      amount: parseTokenAmountToBaseUnits(input.amount),
+      decimals: SOLANA_TOKEN_DECIMALS,
     });
 
     // Deliberate synchronous-confirm stance, same as the Stellar adapter —
@@ -298,7 +337,7 @@ export const solanaWalletAdapter: WalletAdapter = {
     // pattern; the reasoning that made that safe there (avoiding the
     // double-spend bug from treating pending-as-failure) doesn't carry
     // over the same way here.
-    const signature = await signAndSendTransaction(treasury, [createDestinationAtaIx, transferIx]);
+    const signature = await signAndSendTransaction(treasury, [createTreasuryAtaIx, createDestinationAtaIx, transferIx]);
     return { txHash: signature, status: "CONFIRMED" };
   },
 };

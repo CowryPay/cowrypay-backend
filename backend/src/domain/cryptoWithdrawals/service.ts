@@ -13,14 +13,19 @@ import { verifyTransactionPin } from "../pin/service.js";
 import { cryptoWithdrawalsRepo } from "./repository.js";
 import { isValidAddressForChain } from "./addressValidation.js";
 import { computeCryptoWithdrawalFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
-import { readUsdcBalance, sweepWallet } from "../wallets/depositSweeper.js";
+import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
+import { getTokenConfig } from "../wallets/chains.js";
 
 export interface InitiateCryptoWithdrawalInput {
   chain: string;
   amount: string;
   toAddress: string;
   pin: string;
+  // Omitted means USDC — the only token that existed before USDT support,
+  // so every caller that hasn't been updated (old frontend, direct API use)
+  // keeps working exactly as before.
+  tokenSymbol?: string;
 }
 
 // Which wallet ROW this withdrawal dispatches through — mirrors
@@ -69,6 +74,15 @@ export async function initiateCryptoWithdrawal(
     throw new Error(`"${input.toAddress}" is not a valid address for ${input.chain}`);
   }
 
+  const tokenSymbol = input.tokenSymbol ?? env.defaultTokenSymbol;
+  // Stellar/Solana validate their own token support inside the adapter;
+  // EVM chains are validated here up front via chains.ts's token map (e.g.
+  // USDT on Base) so an unsupported pairing fails clean, before any balance
+  // is touched, rather than surfacing later as an opaque adapter error.
+  if (["celo", "base", "optimism"].includes(input.chain.toLowerCase())) {
+    getTokenConfig(input.chain, tokenSymbol);
+  }
+
   const walletChainKey = walletChainKeyFor(input.chain);
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
@@ -78,7 +92,7 @@ export async function initiateCryptoWithdrawal(
   const split = computeCryptoWithdrawalFeeSplit(input.amount);
   if (!split) {
     throw new Error(
-      `${input.amount} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${env.defaultTokenSymbol} fee.`,
+      `${input.amount} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${tokenSymbol} fee.`,
     );
   }
   const { feeAmount, netAmount } = split;
@@ -90,7 +104,7 @@ export async function initiateCryptoWithdrawal(
     // Atomic decrement-with-guard — same double-spend protection as
     // offramp/service.ts's own debit step. Debits the FULL amount (fee +
     // net), same "debit gross, broadcast net" shape as off-ramp sends.
-    const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, input.chain, input.amount);
+    const debited = await ledgerRepo.debitAvailable(client, userId, tokenSymbol, input.chain, input.amount);
     if (!debited) {
       throw new Error("Insufficient balance");
     }
@@ -98,7 +112,7 @@ export async function initiateCryptoWithdrawal(
     const created = await cryptoWithdrawalsRepo.create(client, {
       userId,
       walletId: wallet.id,
-      tokenSymbol: env.defaultTokenSymbol,
+      tokenSymbol,
       chain: input.chain,
       amountHuman: input.amount,
       toAddress: input.toAddress,
@@ -122,14 +136,16 @@ export async function initiateCryptoWithdrawal(
   if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(input.chain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
-      const needed = parseUnits(input.amount, 6);
-      const payoutBalance = await readUsdcBalance(input.chain, payoutAddress);
+      const { decimals: tokenDecimals } = getTokenConfig(input.chain, tokenSymbol);
+      const needed = parseUnits(input.amount, tokenDecimals);
+      const payoutBalance = await readTokenBalance(input.chain, tokenSymbol, payoutAddress);
       if (payoutBalance < needed) {
         console.log(
           `[crypto-withdrawal] payout wallet short on ${input.chain} for withdrawal ${withdrawal.id} (have ${payoutBalance}, need ${needed}) — attempting just-in-time sweep of ${wallet.address}`,
         );
         const swept = await sweepWallet(
           input.chain,
+          tokenSymbol,
           { externalWalletId: wallet.externalWalletId, address: wallet.address as `0x${string}` },
           { keyArn: env.awsKmsPayoutKeyArn, address: payoutAddress },
         );
@@ -138,7 +154,7 @@ export async function initiateCryptoWithdrawal(
         );
 
         // sweepWallet only broadcasts — the very next step is attempting
-        // the payout, so this needs to actually wait for the swept USDC
+        // the payout, so this needs to actually wait for the swept balance
         // to land, or the immediate retry would just hit the same
         // shortfall again. Bounded wait, not indefinite: if it hasn't
         // landed by then, withdraw()'s own liquidity error is the honest
@@ -146,7 +162,7 @@ export async function initiateCryptoWithdrawal(
         if (swept) {
           for (let attempt = 0; attempt < 10; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 3_000));
-            const updatedBalance = await readUsdcBalance(input.chain, payoutAddress);
+            const updatedBalance = await readTokenBalance(input.chain, tokenSymbol, payoutAddress);
             if (updatedBalance >= needed) break;
           }
         }
@@ -163,7 +179,7 @@ export async function initiateCryptoWithdrawal(
   try {
     payout = await getWalletAdapter(input.chain, wallet.provider).withdraw({
       chain: input.chain,
-      tokenSymbol: env.defaultTokenSymbol,
+      tokenSymbol,
       toAddress: input.toAddress,
       amount: netAmount,
       reference,
@@ -173,7 +189,7 @@ export async function initiateCryptoWithdrawal(
       // Refund — the balance was debited up front to prevent double-spend
       // across concurrent requests, but the payout never actually left
       // custody, so the user's balance shouldn't reflect otherwise.
-      await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, input.chain, input.amount);
+      await ledgerRepo.creditAvailable(client, userId, tokenSymbol, input.chain, input.amount);
       await cryptoWithdrawalsRepo.updateState(client, withdrawal.id, { state: "FAILED" });
       await cryptoWithdrawalsRepo.logTransition(
         client,
@@ -224,7 +240,7 @@ export async function initiateCryptoWithdrawal(
     try {
       const feeSweep = await getWalletAdapter(input.chain, wallet.provider).withdraw({
         chain: input.chain,
-        tokenSymbol: env.defaultTokenSymbol,
+        tokenSymbol,
         toAddress: treasuryAddress,
         amount: feeAmount,
         reference: `${reference}-fee`,

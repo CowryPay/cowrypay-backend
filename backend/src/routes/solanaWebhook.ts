@@ -26,11 +26,19 @@ solanaWebhookRouter.post("/webhooks/solana", async (req: Request, res: Response)
     return;
   }
 
-  const mint = env.solanaUsdcMint;
-  const transfers = normalizeHeliusPayload(req.body).filter((t) => t.mint === mint);
+  // Both mints watched, not just USDC — which one a given transfer's
+  // `mint` field matches determines the tokenSymbol stamped on the
+  // deposit below, rather than that being hardcoded regardless of which
+  // token actually moved.
+  const MINT_TO_SYMBOL: Record<string, string> = {
+    ...(env.solanaUsdcMint ? { [env.solanaUsdcMint]: "USDC" } : {}),
+    ...(env.solanaUsdtMint ? { [env.solanaUsdtMint]: "USDT" } : {}),
+  };
+  const transfers = normalizeHeliusPayload(req.body).filter((t) => t.mint in MINT_TO_SYMBOL);
 
   for (const transfer of transfers) {
     try {
+      const tokenSymbol = MINT_TO_SYMBOL[transfer.mint]!;
       // Solana's own official exchange-integration guide recommends
       // accepting deposits only from the correctly-derived Associated
       // Token Account for (owner, mint) — this is Solana's real analogue
@@ -41,7 +49,7 @@ solanaWebhookRouter.post("/webhooks/solana", async (req: Request, res: Response)
       const owner = toAddress(transfer.ownerAddress);
       const [expectedAta] = await findAssociatedTokenPda({
         owner,
-        mint: toAddress(mint),
+        mint: toAddress(transfer.mint),
         tokenProgram: TOKEN_PROGRAM_ADDRESS,
       });
       if (expectedAta !== transfer.ataAddress) {
@@ -65,7 +73,7 @@ solanaWebhookRouter.post("/webhooks/solana", async (req: Request, res: Response)
       await ingestDeposit({
         userId: wallet.userId,
         walletId: wallet.id,
-        tokenSymbol: "USDC",
+        tokenSymbol,
         amount: transfer.amount,
         chain: "solana",
         txHash: transfer.signature,

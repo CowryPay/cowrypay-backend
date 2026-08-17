@@ -19,7 +19,15 @@ const MAX_BLOCK_RANGE = 2000n;
 const CONFIRMATION_BUFFER = 2n;
 
 async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
-  const { viemChain, rpcUrl, usdcAddress, usdcDecimals } = getChainConfig(chain);
+  const { viemChain, rpcUrl, tokens } = getChainConfig(chain);
+  // Watches every token contract configured for this chain (USDC, and USDT
+  // where supported) in one getLogs call — which contract a given log came
+  // from determines the tokenSymbol/decimals used below, rather than that
+  // being assumed regardless of which token actually moved.
+  const tokenAddresses = Object.values(tokens).map((t) => t.address);
+  const tokenByAddress = new Map(
+    Object.entries(tokens).map(([symbol, cfg]) => [cfg.address.toLowerCase(), { symbol, decimals: cfg.decimals }]),
+  );
   const byAddress = new Map(wallets.map((w) => [w.address.toLowerCase(), w]));
   const client = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
 
@@ -49,7 +57,7 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
   for (;;) {
     try {
       logs = await client.getLogs({
-        address: usdcAddress,
+        address: tokenAddresses,
         event: TRANSFER_EVENT,
         args: { to: wallets.map((w) => w.address as `0x${string}`) },
         fromBlock,
@@ -72,11 +80,13 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
     try {
       const wallet = byAddress.get(log.args.to!.toLowerCase());
       if (!wallet) continue; // shouldn't happen — filtered by the watchlist above
+      const token = tokenByAddress.get(log.address.toLowerCase());
+      if (!token) continue; // shouldn't happen — filtered by the address list passed to getLogs above
       await ingestDeposit({
         userId: wallet.userId,
         walletId: wallet.id,
-        tokenSymbol: "USDC",
-        amount: formatUnits(log.args.value!, usdcDecimals),
+        tokenSymbol: token.symbol,
+        amount: formatUnits(log.args.value!, token.decimals),
         chain,
         txHash: log.transactionHash!,
       });
@@ -93,8 +103,9 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
 
 // No webhook exists for self-custody deposit addresses (Blockradar's
 // crediting is entirely webhook-driven — see routes/blockradarWebhook.ts —
-// but nothing calls us for these), so this polls for USDC Transfer events
-// landing at any wallet this app itself watches, on every supported chain
+// but nothing calls us for these), so this polls for Transfer events (any
+// configured token — USDC, and USDT where supported) landing at any wallet
+// this app itself watches, on every supported chain
 // (one KMS key derives one address valid on all of them — see chains.ts),
 // and feeds them into the exact same crediting path a webhook would
 // (ingestDeposit), rather than a parallel one.

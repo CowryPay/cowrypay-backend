@@ -1,16 +1,22 @@
 import { address as toAddress, createSolanaRpc, lamports } from "@solana/kit";
-import { findAssociatedTokenPda, getTransferCheckedInstruction, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
+import {
+  findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstructionAsync,
+  getTransferCheckedInstruction,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import { getTransferSolInstruction } from "@solana-program/system";
 import { env } from "../../config/env.js";
 import { walletsRepo } from "./repository.js";
 import { decryptSolanaSigner, getSolanaTreasurySigner } from "./solanaKms.js";
-import { signAndSendTransaction, USDC_DECIMALS } from "./solanaAdapter.js";
+import { signAndSendTransaction, SOLANA_TOKEN_DECIMALS } from "./solanaAdapter.js";
 
-// Below this, the USDC isn't worth the network fee to move — mirrors
-// chains.ts's MIN_SWEEP_USDC for the EVM chains (0.01 USDC there; kept
-// separate here rather than shared, since nothing about Solana's fee
-// economics ties the two together).
-const MIN_SWEEP_BASE_UNITS = 10_000n; // 0.01 USDC
+// Below this, the token isn't worth the network fee to move — mirrors
+// chains.ts's MIN_SWEEP_TOKEN_AMOUNT for the EVM chains (0.01 there too;
+// kept separate here rather than shared, since nothing about Solana's fee
+// economics ties the two together). Same threshold works for both USDC and
+// USDT since both are 6-decimal SPL tokens.
+const MIN_SWEEP_BASE_UNITS = 10_000n; // 0.01 token
 
 // A simple 1-signer transaction's base fee is 5000 lamports — MIN_FEE_LAMPORTS
 // (the trigger threshold) is buffered up for safety against compute-unit
@@ -60,6 +66,30 @@ export async function sweepWallet(wallet: SweepableSolanaWallet, mint: string): 
     tokenProgram: TOKEN_PROGRAM_ADDRESS,
   });
 
+  // The treasury's own ATA for this mint was never guaranteed to exist —
+  // USDC's happened to from one-time manual bootstrapping when Solana
+  // support first launched, but USDT's has no such history. Checked (not
+  // unconditionally created) so this doesn't cost an extra signed
+  // transaction on every single sweep once it exists — only the very first
+  // sweep of a given mint pays for it. The sweep transaction below is
+  // signed by the DEPOSITING USER's own key, not the treasury's, so unlike
+  // withdraw()'s destination-ATA creation (which the treasury already
+  // signs for), this can't just be folded into that same transaction.
+  const treasuryAtaExists = await rpc
+    .getTokenAccountBalance(treasuryAta)
+    .send()
+    .then(() => true)
+    .catch(() => false);
+  if (!treasuryAtaExists) {
+    const createTreasuryAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
+      payer: treasury,
+      ata: treasuryAta,
+      owner: treasuryOwner,
+      mint: mintAddress,
+    });
+    await signAndSendTransaction(treasury, [createTreasuryAtaIx]);
+  }
+
   const systemBalance = (await rpc.getBalance(owner).send()).value;
   if (systemBalance < MIN_FEE_LAMPORTS) {
     // Defensive top-up — should rarely fire, see the function doc comment.
@@ -74,7 +104,7 @@ export async function sweepWallet(wallet: SweepableSolanaWallet, mint: string): 
     destination: treasuryAta,
     authority: signer,
     amount: userBalance,
-    decimals: USDC_DECIMALS,
+    decimals: SOLANA_TOKEN_DECIMALS,
   });
 
   // Broadcast-and-move-on, same stance as depositSweeper.ts's EVM
@@ -88,19 +118,24 @@ export async function sweepWallet(wallet: SweepableSolanaWallet, mint: string): 
 
 // Has NO effect on user-facing balances — those are already correct the
 // moment the webhook credits the ledger (routes/solanaWebhook.ts). Purely
-// moves the underlying on-chain USDC into the treasury so it's actually
+// moves the underlying on-chain balance into the treasury so it's actually
 // available to back future withdraws — mirrors depositSweeper.ts's own
-// framing exactly.
+// framing exactly. Sweeps both mints per wallet, one after the other — a
+// USDT deposit shouldn't sit unswept just because this loop only ever
+// checked USDC.
 export async function sweepSolanaDeposits(): Promise<void> {
-  if (!env.solanaUsdcMint) return;
+  const mints = [env.solanaUsdcMint, env.solanaUsdtMint].filter((m): m is string => Boolean(m));
+  if (mints.length === 0) return;
   const wallets = await walletsRepo.listByChain("solana");
   if (wallets.length === 0) return;
 
   for (const wallet of wallets) {
-    try {
-      await sweepWallet(wallet, env.solanaUsdcMint);
-    } catch (err) {
-      console.error(`[solana-deposit-sweeper] failed to sweep wallet ${wallet.id}:`, err);
+    for (const mint of mints) {
+      try {
+        await sweepWallet(wallet, mint);
+      } catch (err) {
+        console.error(`[solana-deposit-sweeper] failed to sweep wallet ${wallet.id} (mint ${mint}):`, err);
+      }
     }
   }
 }

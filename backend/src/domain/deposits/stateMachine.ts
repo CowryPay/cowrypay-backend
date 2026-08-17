@@ -6,6 +6,7 @@ import { walletsRepo } from "../wallets/repository.js";
 import { sweepWallet as sweepEvmWallet } from "../wallets/depositSweeper.js";
 import { sweepWallet as sweepSolanaWallet } from "../wallets/solanaDepositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
+import { getSolanaMint } from "../wallets/solanaAdapter.js";
 import { depositsRepo } from "./repository.js";
 import { screenDeposit } from "./screening.js";
 
@@ -43,6 +44,7 @@ async function triggerSweepAfterCredit(deposit: Deposit): Promise<void> {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
       await sweepEvmWallet(
         deposit.chain,
+        deposit.tokenSymbol,
         { externalWalletId: wallet.externalWalletId, address: wallet.address as `0x${string}` },
         { keyArn: env.awsKmsPayoutKeyArn, address: payoutAddress },
       );
@@ -50,10 +52,10 @@ async function triggerSweepAfterCredit(deposit: Deposit): Promise<void> {
     }
 
     if (deposit.chain === "solana") {
-      if (!env.solanaUsdcMint) return;
+      const mint = getSolanaMint(deposit.tokenSymbol);
       const wallet = await walletsRepo.findByUserIdAndChain(deposit.userId, "solana");
       if (!wallet) return;
-      await sweepSolanaWallet({ address: wallet.address, externalWalletId: wallet.externalWalletId }, env.solanaUsdcMint);
+      await sweepSolanaWallet({ address: wallet.address, externalWalletId: wallet.externalWalletId }, mint);
     }
   } catch (err) {
     console.error(`[deposit] auto-sweep-on-deposit failed for deposit ${deposit.id}:`, err);

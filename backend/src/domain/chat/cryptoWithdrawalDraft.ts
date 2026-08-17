@@ -6,7 +6,7 @@ import { ledgerRepo } from "../ledger/repository.js";
 import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
 import { computeCryptoWithdrawalFeeSplit } from "../offramp/fee.js";
-import { SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
+import { SUPPORTED_CHAINS as EVM_CHAINS, getTokenConfig } from "../wallets/chains.js";
 import { env } from "../../config/env.js";
 import { formatAmount } from "../../utils/format.js";
 import type { ParsedIntent } from "./schemas.js";
@@ -21,6 +21,7 @@ export interface CryptoWithdrawalDraft {
   amount: string;
   toAddress: string;
   chain: string;
+  tokenSymbol: string;
 }
 
 export type CryptoWithdrawalIntent = Extract<ParsedIntent, { kind: "cryptoWithdrawal" }>;
@@ -42,6 +43,7 @@ export function mergeCryptoWithdrawalDrafts(
     amount: incoming.amount ?? existing.amount,
     toAddress: incoming.toAddress ?? existing.toAddress,
     chainHint: incoming.chainHint ?? existing.chainHint,
+    tokenHint: incoming.tokenHint ?? existing.tokenHint,
   };
 }
 
@@ -99,6 +101,16 @@ export async function resolveCryptoWithdrawalIntent(
     };
   }
 
+  // Omitted means USDC, the only token that existed before USDT support.
+  const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
+  if (["celo", "base", "optimism"].includes(chain)) {
+    try {
+      getTokenConfig(chain, tokenSymbol);
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKeyFor(chain));
   if (!wallet) {
     return { ok: false, message: `You don't have a wallet on ${capitalize(chain)} yet.` };
@@ -106,7 +118,7 @@ export async function resolveCryptoWithdrawalIntent(
 
   const amountStr = intent.amount.toString();
   const balances = await ledgerRepo.getBalancesForUser(userId);
-  const balance = balances.find((b) => b.chain === chain && b.tokenSymbol === env.defaultTokenSymbol);
+  const balance = balances.find((b) => b.chain === chain && b.tokenSymbol === tokenSymbol);
   if (!balance || Number(balance.availableBalance) < intent.amount) {
     // Postgres numeric columns come back full-precision ("0.000000000000000000")
     // — trimmed for a user-facing message the same way every other balance
@@ -114,7 +126,7 @@ export async function resolveCryptoWithdrawalIntent(
     const available = formatAmount(balance?.availableBalance ?? "0");
     return {
       ok: false,
-      message: `You only have ${available} ${env.defaultTokenSymbol} available on ${capitalize(chain)} — that's less than the ${amountStr} you asked to withdraw.`,
+      message: `You only have ${available} ${tokenSymbol} available on ${capitalize(chain)} — that's less than the ${amountStr} you asked to withdraw.`,
     };
   }
 
@@ -125,15 +137,15 @@ export async function resolveCryptoWithdrawalIntent(
   if (!split) {
     return {
       ok: false,
-      message: `${amountStr} ${env.defaultTokenSymbol} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${env.defaultTokenSymbol} fee. Try a larger amount.`,
+      message: `${amountStr} ${tokenSymbol} is too small to withdraw — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${tokenSymbol} fee. Try a larger amount.`,
     };
   }
 
-  const draft: CryptoWithdrawalDraft = { amount: amountStr, toAddress: intent.toAddress, chain };
+  const draft: CryptoWithdrawalDraft = { amount: amountStr, toAddress: intent.toAddress, chain, tokenSymbol };
 
   return {
     ok: true,
     draft,
-    summary: `Ready to withdraw ${amountStr} ${env.defaultTokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Fee: ${split.feeAmount} ${env.defaultTokenSymbol} — you'll receive ${split.netAmount} ${env.defaultTokenSymbol}. Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to withdraw ${amountStr} ${tokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive ${split.netAmount} ${tokenSymbol}. Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
   };
 }

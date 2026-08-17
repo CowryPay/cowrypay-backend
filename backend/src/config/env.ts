@@ -160,6 +160,11 @@ export const env = {
   // stablecoins/usdc-contract-addresses) — devnet's differs, MUST override
   // per environment.
   solanaUsdcMint: process.env.SOLANA_USDC_MINT ?? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  // Tether's official USDT mint on Solana mainnet, announced by Solana's
+  // own account — verified live via getTokenSupply (decimals: 6, ~3.8B
+  // real circulating supply) before being hardcoded here. Devnet has no
+  // real equivalent; override per environment same as the USDC mint above.
+  solanaUsdtMint: process.env.SOLANA_USDT_MINT ?? "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
   // Symmetric KMS key wrapping every Solana seed at rest (per-user AND the
   // treasury's) — may point at the same underlying key as
   // STELLAR_KMS_KEY_ARN (one symmetric key can wrap either curve's seed

@@ -16,8 +16,9 @@ import { computeFeeSplit, requireTreasuryAddress } from "./fee.js";
 import { sendsRepo } from "./repository.js";
 import { isPaycrestEligible, type OfframpProvider } from "./providerSelection.js";
 import { getReceiptStatus } from "../wallets/receiptStatus.js";
-import { readUsdcBalance, sweepWallet } from "../wallets/depositSweeper.js";
+import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
+import { getTokenConfig } from "../wallets/chains.js";
 import { parseUnits } from "viem";
 
 function sleep(ms: number): Promise<void> {
@@ -61,6 +62,11 @@ export interface LockedOrder extends CreatedOrder {
   // remittanceDraft.ts can lock either provider, not assumed to be Paycrest
   // the way it safely could be before (see the reuse fix below).
   provider: OfframpProvider;
+  // Which token this order was actually quoted/created for — omitted means
+  // USDC, matching every locked order created before USDT support existed.
+  // Reusing a chat-locked order must debit the SAME token it was quoted
+  // against, or the amounts would silently mean different things.
+  tokenSymbol?: string;
 }
 
 export interface InitiateSendInput {
@@ -87,6 +93,10 @@ export interface InitiateSendInput {
   // are expected to run before this, to actually decide which provider
   // and institution list to use.
   provider?: OfframpProvider;
+  // Omitted means USDC — the only token that existed before USDT support,
+  // so every caller that hasn't been updated keeps working exactly as
+  // before.
+  tokenSymbol?: string;
 }
 
 export interface InitiatedSend {
@@ -148,6 +158,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const chain = input.chain ?? wallet.chain;
   const walletAddress = wallet.address;
 
+  // A reused chat-locked order must debit the same token it was quoted
+  // against — see LockedOrder.tokenSymbol's own comment. Validated for EVM
+  // chains up front via chains.ts's token map (e.g. USDT on Base) so an
+  // unsupported pairing fails clean, before any balance is touched.
+  const tokenSymbol = input.existingOrder?.tokenSymbol ?? input.tokenSymbol ?? env.defaultTokenSymbol;
+  if (["celo", "base", "optimism"].includes(chain.toLowerCase())) {
+    getTokenConfig(chain, tokenSymbol);
+  }
+
   // Reuse the chat-locked order only if it hasn't expired by the time the
   // user actually confirms — Paycrest quotes are only valid for ~1hr.
   const reusable =
@@ -191,7 +210,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     // concurrent sends can't both pass a balance check and double-spend the
     // same funds; whichever commits first wins, the other sees the reduced
     // balance and fails here.
-    const debited = await ledgerRepo.debitAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
+    const debited = await ledgerRepo.debitAvailable(client, userId, tokenSymbol, chain, input.amount);
     if (!debited) {
       throw new Error("Insufficient balance");
     }
@@ -199,7 +218,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     const created = await sendsRepo.create(client, {
       userId,
       walletId: wallet.id,
-      tokenSymbol: env.defaultTokenSymbol,
+      tokenSymbol,
       chain,
       amountHuman: input.amount,
       fiatCurrency: input.fiatCurrency,
@@ -238,14 +257,14 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       accountName: input.recipient.accountName,
     };
     if (provider === "quidax") {
-      return createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency: input.fiatCurrency, recipient, reference });
+      return createQuidaxOrder({ amount: netAmount, network: chain, token: tokenSymbol, fiatCurrency: input.fiatCurrency, recipient, reference });
     }
     if (provider === "centiiv") {
-      return createCentiivOrder({ amount: netAmount, network: chain, fiatCurrency: input.fiatCurrency, recipient, reference });
+      return createCentiivOrder({ amount: netAmount, network: chain, token: tokenSymbol, fiatCurrency: input.fiatCurrency, recipient, reference });
     }
     return createOfframpOrder({
       amount: netAmount,
-      token: env.defaultTokenSymbol,
+      token: tokenSymbol,
       network: chain,
       refundAddress: walletAddress,
       fiatCurrency: input.fiatCurrency,
@@ -288,14 +307,16 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
-      const needed = parseUnits(netAmount, 6);
-      const payoutBalance = await readUsdcBalance(chain, payoutAddress);
+      const { decimals: tokenDecimals } = getTokenConfig(chain, tokenSymbol);
+      const needed = parseUnits(netAmount, tokenDecimals);
+      const payoutBalance = await readTokenBalance(chain, tokenSymbol, payoutAddress);
       if (payoutBalance < needed) {
         console.log(
           `[offramp] payout wallet short on ${chain} for send ${updated.id} (have ${payoutBalance}, need ${needed}) — attempting just-in-time sweep of ${walletAddress}`,
         );
         const swept = await sweepWallet(
           chain,
+          tokenSymbol,
           { externalWalletId: wallet.externalWalletId, address: walletAddress },
           { keyArn: env.awsKmsPayoutKeyArn, address: payoutAddress },
         );
@@ -304,14 +325,15 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
         // sweepWallet only broadcasts (same "broadcast and move on" stance
         // as withdraw() itself — see its own comment) — the very next step
         // here is attempting the payout, so unlike the periodic background
-        // sweeper this needs to actually wait for the swept USDC to land,
-        // or the immediate retry below would just hit the same shortfall
-        // again. Bounded wait, not indefinite: if it hasn't landed by
-        // then, withdraw()'s own liquidity error is the honest outcome.
+        // sweeper this needs to actually wait for the swept balance to
+        // land, or the immediate retry below would just hit the same
+        // shortfall again. Bounded wait, not indefinite: if it hasn't
+        // landed by then, withdraw()'s own liquidity error is the honest
+        // outcome.
         if (swept) {
           for (let attempt = 0; attempt < 10; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 3_000));
-            const updatedBalance = await readUsdcBalance(chain, payoutAddress);
+            const updatedBalance = await readTokenBalance(chain, tokenSymbol, payoutAddress);
             if (updatedBalance >= needed) break;
           }
         }
@@ -328,7 +350,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   try {
     payout = await getWalletAdapter(chain, wallet.provider).withdraw({
       chain,
-      tokenSymbol: env.defaultTokenSymbol,
+      tokenSymbol,
       toAddress: order.receiveAddress,
       amount: netAmount,
       reference: `${reference}-payout`,
@@ -338,7 +360,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       // Refund — the balance was debited up front to prevent double-spending
       // across concurrent sends, but the payout never actually left custody,
       // so the user's balance shouldn't reflect otherwise.
-      await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
+      await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, input.amount);
       await sendsRepo.updateState(client, updated.id, { state: "FAILED" });
       await sendsRepo.logTransition(
         client,
@@ -371,7 +393,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
     if (confirmation === "reverted") {
       await withTransaction(async (client) => {
-        await ledgerRepo.creditAvailable(client, userId, env.defaultTokenSymbol, chain, input.amount);
+        await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, input.amount);
         await sendsRepo.updateState(client, updated.id, { state: "FAILED", withdrawTxHash: payout.txHash });
         await sendsRepo.logTransition(
           client,
@@ -434,7 +456,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     try {
       const feeSweep = await getWalletAdapter(chain, wallet.provider).withdraw({
         chain,
-        tokenSymbol: env.defaultTokenSymbol,
+        tokenSymbol,
         toAddress: treasuryAddress,
         amount: feeAmount,
         reference: `${reference}-fee`,
@@ -467,7 +489,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const recipientLabel = input.recipient.institutionName ?? input.recipient.institution;
   const message = [
     `⏳ Your transaction with the following details is processing:`,
-    `💸 Sent ${input.amount} ${env.defaultTokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
+    `💸 Sent ${input.amount} ${tokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
       (fiatEstimate ? ` will receive ${input.fiatCurrency} ${fiatEstimate}` : ""),
     ``,
     `This usually completes within a few minutes — we'll update you once it's confirmed.`,

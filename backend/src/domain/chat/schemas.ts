@@ -17,6 +17,9 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     // only meaningful once a wallet can hold balance on more than one
     // chain; see remittanceDraft.ts's resolution logic.
     chainHint: z.string().optional(),
+    // Which token to send, if the user named one (e.g. "send 20 USDT") —
+    // omitted means USDC, the only token that existed before USDT support.
+    tokenHint: z.string().optional(),
   }),
   z.object({
     kind: z.literal("admin"),
@@ -37,6 +40,9 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     amount: z.number().optional(),
     toAddress: z.string().optional(),
     chainHint: z.string().optional(),
+    // Which token to withdraw, if the user named one (e.g. "withdraw 20
+    // USDT") — omitted means USDC, same as remittance's tokenHint.
+    tokenHint: z.string().optional(),
   }),
   z.object({
     kind: z.literal("unknown"),

@@ -11,6 +11,8 @@ const CreateCryptoWithdrawalSchema = z.object({
   amount: z.string().regex(/^\d+(\.\d+)?$/, "amount must be a decimal string"),
   toAddress: z.string().min(1),
   pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
+  // Omitted means USDC — see InitiateCryptoWithdrawalInput's own comment.
+  tokenSymbol: z.string().min(1).optional(),
 });
 
 // This endpoint itself is still never called from chat directly — a

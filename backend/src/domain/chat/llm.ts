@@ -9,9 +9,9 @@ const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
 const INTENT_SYSTEM = `You are CowryPay's intent parser. Output ONLY valid JSON matching this shape:
 - Send money to a bank account or mobile money abroad (remittance/off-ramp) — recipient does NOT need a CowryPay account. Use whenever the message mentions: "send", "bank account", "bank", "mobile money", "MoMo", "account number", "phone number", a country name (e.g. Nigeria, Kenya, Uganda, Tanzania, Malawi), or a saved nickname like "mom"/"my landlord":
-  {"kind":"remittance","action":"SEND_REMITTANCE","amount":number,"recipientNickname":"string (saved nickname if used, e.g. 'mom')","countryHint":"string (country if mentioned, e.g. 'Nigeria')","institutionHint":"string (bank or mobile money name if mentioned, e.g. 'GTBank', 'MTN MoMo')","accountIdentifier":"string (account/phone number if given)","chainHint":"string (which chain/network to send from, if named, e.g. 'Base', 'Celo', 'Optimism')"}
+  {"kind":"remittance","action":"SEND_REMITTANCE","amount":number,"recipientNickname":"string (saved nickname if used, e.g. 'mom')","countryHint":"string (country if mentioned, e.g. 'Nigeria')","institutionHint":"string (bank or mobile money name if mentioned, e.g. 'GTBank', 'MTN MoMo')","accountIdentifier":"string (account/phone number if given)","chainHint":"string (which chain/network to send from, if named, e.g. 'Base', 'Celo', 'Optimism')","tokenHint":"string (which token, if named, e.g. 'USDC', 'USDT')"}
 - Withdraw / send crypto to an external wallet ADDRESS (not a bank account, not mobile money, no country/institution/phone number — a raw wallet address instead, e.g. starting with "0x", "G", or a base58 string) — e.g. "withdraw to wallet", "send to my wallet", "send USDC to an address", "crypto withdrawal":
-  {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET","amount":number,"toAddress":"string (the exact wallet address if given, copy it character-for-character, never guess or complete a partial one)","chainHint":"string (which chain, if named, e.g. 'Base', 'Celo', 'Optimism', 'Stellar', 'Solana')"}
+  {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET","amount":number,"toAddress":"string (the exact wallet address if given, copy it character-for-character, never guess or complete a partial one)","chainHint":"string (which chain, if named, e.g. 'Base', 'Celo', 'Optimism', 'Stellar', 'Solana')","tokenHint":"string (which token, if named, e.g. 'USDC', 'USDT')"}
 - Check balance / deposits: {"kind":"admin","action":"BALANCE"}
 - Transaction history / recent sends: {"kind":"admin","action":"TX_HISTORY"}
 - Help / what can you do: {"kind":"admin","action":"HELP"}
@@ -24,10 +24,11 @@ Examples:
 - "I want to withdraw to wallet" → {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET"}
 - "Withdraw 20 USDC to 0x1234567890abcdef1234567890abcdef12345678 on Base" → {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET","amount":20,"toAddress":"0x1234567890abcdef1234567890abcdef12345678","chainHint":"Base"}
 - "Send 5 USDC to GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD" → {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET","amount":5,"toAddress":"GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD"}
+- "Send 20 USDT to Nigeria via Celo" → {"kind":"remittance","action":"SEND_REMITTANCE","amount":20,"countryHint":"Nigeria","chainHint":"Celo","tokenHint":"USDT"}
 - "What's my balance" → {"kind":"admin","action":"BALANCE"}
 - "What can you do" → {"kind":"admin","action":"HELP"}
 
-Rules: amounts are numbers (user may say dollars or $). If a message describes sending money but doesn't cleanly fit remittance, still classify it as remittance with whatever fields you can extract — missing fields get asked for separately, don't invent them. For cryptoWithdrawal's toAddress, copy the address EXACTLY as written, character-for-character — never correct, complete, guess, or normalize it in any way, even if it looks malformed; a wrong character here is unrecoverable money loss, so an uncertain or partial address must be left out entirely rather than guessed at.`;
+Rules: amounts are numbers (user may say dollars or $). If a message describes sending money but doesn't cleanly fit remittance, still classify it as remittance with whatever fields you can extract — missing fields get asked for separately, don't invent them. For cryptoWithdrawal's toAddress, copy the address EXACTLY as written, character-for-character — never correct, complete, guess, or normalize it in any way, even if it looks malformed; a wrong character here is unrecoverable money loss, so an uncertain or partial address must be left out entirely rather than guessed at. tokenHint should only ever be "USDC" or "USDT" (case-insensitive as heard) — leave it out if no token is named or it's some other word.`;
 
 const CHAT_SYSTEM = `You are CowryPay's assistant — a friendly, concise guide for a cross-border stablecoin payments app.
 

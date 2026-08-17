@@ -47,11 +47,14 @@ export async function selectOfframpProvider(params: {
   chain: string;
   amount: string;
   fiatCurrency: string;
+  // Omitted means USDC — the only token that existed before USDT support.
+  token?: string;
 }): Promise<ProviderQuote> {
+  const token = params.token ?? "USDC";
   const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain)
     ? getPaycrestRate({
         network: params.chain,
-        token: "USDC",
+        token,
         amount: params.amount,
         fiatCurrency: params.fiatCurrency,
       })
@@ -60,13 +63,13 @@ export async function selectOfframpProvider(params: {
     : Promise.resolve(null);
 
   const quidaxPromise: Promise<ProviderQuote | null> = isQuidaxEligible(params.chain, params.fiatCurrency)
-    ? getQuidaxRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
+    ? getQuidaxRate({ network: params.chain, token, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "quidax" as const, toAmount: q.toAmount }))
         .catch(() => null)
     : Promise.resolve(null);
 
   const centiivPromise: Promise<ProviderQuote | null> = isCentiivEligible(params.chain, params.fiatCurrency)
-    ? getCentiivRate({ network: params.chain, amount: params.amount, fiatCurrency: params.fiatCurrency })
+    ? getCentiivRate({ network: params.chain, token, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "centiiv" as const, toAmount: q.estimatedReceivableAmount }))
         .catch(() => null)
     : Promise.resolve(null);

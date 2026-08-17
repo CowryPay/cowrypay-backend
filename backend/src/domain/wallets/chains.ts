@@ -3,27 +3,42 @@ import { celo, base, optimism } from "viem/chains";
 import { parseEther, parseUnits } from "viem";
 import { env } from "../../config/env.js";
 
+export interface TokenConfig {
+  address: `0x${string}`;
+  decimals: number;
+}
+
 export interface ChainConfig {
   viemChain: Chain;
   rpcUrl: string;
-  usdcAddress: `0x${string}`;
-  usdcDecimals: number;
+  // Keyed by uppercase symbol ("USDC", "USDT"). A chain that doesn't
+  // support a given token simply has no entry — getTokenConfig throws a
+  // clear "not supported" error rather than that being checked separately
+  // in every caller.
+  tokens: Record<string, TokenConfig>;
   // Native token, chain-specific — ETH on the L2s below is a very
   // different order of value than CELO, so these aren't shared constants.
   gasTopUpAmount: bigint;
   gasBufferThreshold: bigint;
 }
 
-// USDC contract addresses verified on-chain (symbol()/decimals()) before
-// being hardcoded here — see the Phase 6 migration plan. One KMS key
-// derives one address valid on every chain listed here (same curve, same
-// derivation), so adding a chain never requires new wallet rows.
+// Contract addresses verified on-chain (symbol()/decimals()) before being
+// hardcoded here — see the Phase 6 migration plan (USDC) and the USDT
+// rollout that added the second entry per chain. One KMS key derives one
+// address valid on every chain listed here (same curve, same derivation),
+// so adding a chain never requires new wallet rows.
 const CHAIN_REGISTRY: Record<string, ChainConfig> = {
   celo: {
     viemChain: celo,
     rpcUrl: env.celoRpcUrl,
-    usdcAddress: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
-    usdcDecimals: 6,
+    tokens: {
+      USDC: { address: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C", decimals: 6 },
+      // Native Tether deployment (deployer: "Tether: Deployer" on
+      // CeloScan, not a bridge) — confirmed live via decimals()/symbol()
+      // eth_call before being hardcoded here, same discipline as USDC
+      // above. symbol() actually returns "USD₮", displayed/traded as USDT.
+      USDT: { address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", decimals: 6 },
+    },
     // Confirmed live that the previous values (0.01 / 0.005) were no longer
     // sufficient: at a real, current Celo gas price of 202.5 gwei, one
     // standard ERC-20 transfer costs ~0.0132 CELO — above both the old
@@ -42,8 +57,14 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
   base: {
     viemChain: base,
     rpcUrl: env.baseRpcUrl,
-    usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    usdcDecimals: 6,
+    // USDT deliberately excluded here — Tether's own official
+    // supported-protocols list doesn't include Base at all; the only
+    // "USDT" contract on Base is a third-party bridged token Tether
+    // explicitly disclaims ("not issued by, redeemable by, or affiliated
+    // with Tether"). Real redemption/depeg risk, not wired in.
+    tokens: {
+      USDC: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
+    },
     // Base is an L2 with very cheap gas (a standard ERC-20 transfer costs a
     // small fraction of this) — a starting point, worth tuning
     // operationally rather than treated as precisely calibrated. Lowered
@@ -62,8 +83,9 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
   optimism: {
     viemChain: optimism,
     rpcUrl: env.optimismRpcUrl,
-    usdcAddress: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
-    usdcDecimals: 6,
+    tokens: {
+      USDC: { address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6 },
+    },
     gasTopUpAmount: parseEther("0.0001"),
     gasBufferThreshold: parseEther("0.00003"),
   },
@@ -79,6 +101,21 @@ export function getChainConfig(chain: string): ChainConfig {
   return config;
 }
 
-// Not worth spending gas to move less than this — shared across chains
-// since it's expressed in USDC (6 decimals everywhere), not native token.
-export const MIN_SWEEP_USDC = parseUnits("0.01", 6);
+export function getTokenConfig(chain: string, tokenSymbol: string): TokenConfig {
+  const chainConfig = getChainConfig(chain);
+  const token = chainConfig.tokens[tokenSymbol.toUpperCase()];
+  if (!token) {
+    throw new Error(
+      `${tokenSymbol} is not supported on ${chain} (supported here: ${Object.keys(chainConfig.tokens).join(", ")})`,
+    );
+  }
+  return token;
+}
+
+export function getSupportedTokens(chain: string): string[] {
+  return Object.keys(getChainConfig(chain).tokens);
+}
+
+// Not worth spending gas to move less than this — shared across chains and
+// tokens since both USDC and USDT use 6 decimals everywhere we support them.
+export const MIN_SWEEP_TOKEN_AMOUNT = parseUnits("0.01", 6);

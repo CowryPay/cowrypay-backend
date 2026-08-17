@@ -131,17 +131,18 @@ export interface RateQuote {
 // actually arriving.
 export async function getOfframpRate(params: {
   network: string;
+  token: string;
   amount: string;
   fiatCurrency: string;
 }): Promise<RateQuote> {
   const network = centiivNetworkFor(params.network);
-  if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${params.network} for USDC`);
+  if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${params.network} for ${params.token}`);
   const result = await centiivFetch<{ rate: string; estimatedReceivableAmount: string; fees: string }>(
     "/public/quote",
     {
       method: "POST",
       body: JSON.stringify({
-        fromAsset: "USDC",
+        fromAsset: params.token.toUpperCase(),
         toAsset: params.fiatCurrency.toUpperCase(),
         amount: Number(params.amount),
         network,
@@ -161,6 +162,7 @@ export interface OfframpRecipient {
 export interface CreateOrderInput {
   amount: string;
   network: string;
+  token: string;
   fiatCurrency: string;
   recipient: OfframpRecipient;
   reference: string; // used only as the Idempotency-Key header (confirmed live: identical header + body returns the SAME order id, no duplicate) — POST /requests rejects any extra body field outright, including a "reference" field
@@ -193,7 +195,7 @@ export interface CreatedOrder {
 // real data) and it only surfaced as a REFUND after the fact.
 export async function createOfframpOrder(input: CreateOrderInput): Promise<CreatedOrder> {
   const network = centiivNetworkFor(input.network);
-  if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${input.network} for USDC`);
+  if (!network) throw new Error(`Centiiv off-ramp doesn't support chain ${input.network} for ${input.token}`);
 
   const beneficiaryType = centiivBeneficiaryTypeFor(input.fiatCurrency);
   if (!beneficiaryType) throw new Error(`Centiiv off-ramp doesn't support fiat currency ${input.fiatCurrency}`);
@@ -218,7 +220,12 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
     };
   }
 
-  const quote = await getOfframpRate({ network: input.network, amount: input.amount, fiatCurrency: input.fiatCurrency });
+  const quote = await getOfframpRate({
+    network: input.network,
+    token: input.token,
+    amount: input.amount,
+    fiatCurrency: input.fiatCurrency,
+  });
 
   const result = await centiivFetch<{
     id: string;
@@ -227,7 +234,7 @@ export async function createOfframpOrder(input: CreateOrderInput): Promise<Creat
     method: "POST",
     headers: { "Idempotency-Key": input.reference },
     body: JSON.stringify({
-      fromAsset: "USDC",
+      fromAsset: input.token.toUpperCase(),
       toAsset: input.fiatCurrency.toUpperCase(),
       amount: Number(input.amount),
       network,

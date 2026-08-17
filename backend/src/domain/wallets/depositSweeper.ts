@@ -3,7 +3,7 @@ import { env } from "../../config/env.js";
 import { walletsRepo } from "./repository.js";
 import { kmsAccountFromKey, getWalletAddress } from "./awsKmsAdapter.js";
 import { getReceiptStatus } from "./receiptStatus.js";
-import { getChainConfig, SUPPORTED_CHAINS, MIN_SWEEP_USDC } from "./chains.js";
+import { getChainConfig, getTokenConfig, SUPPORTED_CHAINS, MIN_SWEEP_TOKEN_AMOUNT } from "./chains.js";
 import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
 
 const ERC20_ABI = [
@@ -43,13 +43,15 @@ export interface SweepableWallet {
   address: string;
 }
 
-// Shared with offramp/service.ts's just-in-time sweep check — same ABI,
-// same "read a USDC balance" need, kept here instead of duplicated since
-// this file already owns the ERC20 ABI for the sweep transfer itself.
-export async function readUsdcBalance(chain: string, address: `0x${string}`): Promise<bigint> {
-  const { viemChain, rpcUrl, usdcAddress } = getChainConfig(chain);
+// Shared with offramp/service.ts's and cryptoWithdrawals/service.ts's
+// just-in-time sweep checks — same ABI, same "read a token balance" need,
+// kept here instead of duplicated since this file already owns the ERC20
+// ABI for the sweep transfer itself.
+export async function readTokenBalance(chain: string, tokenSymbol: string, address: `0x${string}`): Promise<bigint> {
+  const { viemChain, rpcUrl } = getChainConfig(chain);
+  const { address: tokenAddress } = getTokenConfig(chain, tokenSymbol);
   const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
-  return publicClient.readContract({ address: usdcAddress, abi: ERC20_ABI, functionName: "balanceOf", args: [address] });
+  return publicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "balanceOf", args: [address] });
 }
 
 // Kept separate from the listByProvider/DB orchestration below so it can be
@@ -57,18 +59,24 @@ export async function readUsdcBalance(chain: string, address: `0x${string}`): Pr
 // mirrors how receiptStatus.ts's getReceiptStatus was kept independent in
 // Phase 3. Returns true if a sweep was attempted (broadcast), false if
 // skipped (below dust threshold, or the gas top-up never confirmed).
-export async function sweepWallet(chain: string, wallet: SweepableWallet, payout: SweepablePayout): Promise<boolean> {
-  const { viemChain, rpcUrl, usdcAddress, gasTopUpAmount, gasBufferThreshold } = getChainConfig(chain);
+export async function sweepWallet(
+  chain: string,
+  tokenSymbol: string,
+  wallet: SweepableWallet,
+  payout: SweepablePayout,
+): Promise<boolean> {
+  const { viemChain, rpcUrl, gasTopUpAmount, gasBufferThreshold } = getChainConfig(chain);
+  const { address: tokenAddress } = getTokenConfig(chain, tokenSymbol);
   const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
   const address = wallet.address as `0x${string}`;
 
-  const usdcBalance = await publicClient.readContract({
-    address: usdcAddress,
+  const tokenBalance = await publicClient.readContract({
+    address: tokenAddress,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [address],
   });
-  if (usdcBalance < MIN_SWEEP_USDC) return false;
+  if (tokenBalance < MIN_SWEEP_TOKEN_AMOUNT) return false;
 
   const nativeBalance = await publicClient.getBalance({ address });
   if (nativeBalance < gasBufferThreshold) {
@@ -122,23 +130,23 @@ export async function sweepWallet(chain: string, wallet: SweepableWallet, payout
   const data = encodeFunctionData({
     abi: ERC20_ABI,
     functionName: "transfer",
-    args: [payout.address, usdcBalance],
+    args: [payout.address, tokenBalance],
   });
   // Broadcast and move on — same stance as withdraw() (Phase 2): no
   // user-facing state depends on this confirming immediately, so there's
   // no double-spend-shaped risk here to guard against. A failed/stuck
   // sweep is simply reattempted next cycle.
-  await walletClient.sendTransaction({ to: usdcAddress, data, value: 0n });
+  await walletClient.sendTransaction({ to: tokenAddress, data, value: 0n });
   return true;
 }
 
-// Moves USDC from each user's own self-custody deposit address into the
-// single payout key (see awsKmsAdapter.ts's withdraw()), on every
-// supported chain (one KMS key derives one address valid on all of them —
-// see chains.ts), so that key actually has funds to pay future sends out
-// of. This has NO effect on user-facing balances — those are already
-// correct the moment domain/deposits/stateMachine.ts credits the ledger
-// (see depositScanner.ts) — it's a pure backend liquidity concern. A
+// Moves each supported token from each user's own self-custody deposit
+// address into the single payout key (see awsKmsAdapter.ts's withdraw()),
+// on every supported chain (one KMS key derives one address valid on all
+// of them — see chains.ts), so that key actually has funds to pay future
+// sends out of. This has NO effect on user-facing balances — those are
+// already correct the moment domain/deposits/stateMachine.ts credits the
+// ledger (see depositScanner.ts) — it's a pure backend liquidity concern. A
 // failed or stuck sweep degrades liquidity, it can never corrupt
 // accounting, since it's purely a balance-check-driven, self-correcting
 // process with nothing to track between runs (a successful sweep just
@@ -156,11 +164,14 @@ export async function sweepDeposits(): Promise<void> {
   const payout: SweepablePayout = { keyArn: payoutKeyArn, address: payoutAddress };
 
   for (const chain of SUPPORTED_CHAINS) {
+    const tokenSymbols = Object.keys(getChainConfig(chain).tokens);
     for (const wallet of wallets) {
-      try {
-        await sweepWallet(chain, wallet, payout);
-      } catch (err) {
-        console.error(`[deposit-sweeper] failed to sweep wallet ${wallet.id} on ${chain}:`, err);
+      for (const tokenSymbol of tokenSymbols) {
+        try {
+          await sweepWallet(chain, tokenSymbol, wallet, payout);
+        } catch (err) {
+          console.error(`[deposit-sweeper] failed to sweep wallet ${wallet.id} on ${chain} (${tokenSymbol}):`, err);
+        }
       }
     }
   }

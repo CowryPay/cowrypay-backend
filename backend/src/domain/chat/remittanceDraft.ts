@@ -31,6 +31,7 @@ import {
   type OfframpProvider,
 } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
+import { getTokenConfig } from "../wallets/chains.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
@@ -57,6 +58,9 @@ export interface RemittanceDraft {
   // show it somewhere (confirm card / receipt) per Roberto's own note on
   // why this field exists.
   provider: OfframpProvider;
+  // Which token this order was actually quoted/created for — see
+  // service.ts's LockedOrder.tokenSymbol comment.
+  tokenSymbol: string;
 }
 
 export type RemittanceResolution =
@@ -78,6 +82,7 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
     institutionHint: incoming.institutionHint ?? existing.institutionHint,
     accountIdentifier: incoming.accountIdentifier ?? existing.accountIdentifier,
     chainHint: incoming.chainHint ?? existing.chainHint,
+    tokenHint: incoming.tokenHint ?? existing.tokenHint,
   };
 }
 
@@ -122,12 +127,16 @@ async function finalizeRemittanceDraft(
   fiatCountryLabel: string,
   recipient: SendRecipient,
   chainHint?: string,
+  tokenHint?: string,
 ): Promise<RemittanceResolution> {
   const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
   const walletAddress = wallet.address;
 
-  // Balance is tracked per chain (USDC on one chain isn't spendable on
+  // Omitted means USDC, the only token that existed before USDT support.
+  const tokenSymbol = tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
+
+  // Balance is tracked per chain (a token on one chain isn't spendable on
   // another) — resolve which chain this send draws from before locking a
   // rate. No balance anywhere yet still falls through to wallet.chain as a
   // reasonable default; the real "not enough funds" error surfaces later,
@@ -139,7 +148,7 @@ async function finalizeRemittanceDraft(
   // individually (a real null previously crashed the chainHint match below).
   const balances = await ledgerRepo.getBalancesForUser(userId);
   const fundedChains = balances
-    .filter((b) => b.tokenSymbol === env.defaultTokenSymbol && Number(b.availableBalance) > 0)
+    .filter((b) => b.tokenSymbol === tokenSymbol && Number(b.availableBalance) > 0)
     .map((b) => ({ ...b, chain: b.chain ?? wallet.chain }));
 
   let chain: string;
@@ -148,15 +157,28 @@ async function finalizeRemittanceDraft(
     if (!match) {
       return {
         ok: false,
-        message: `You don't have a ${env.defaultTokenSymbol} balance on ${chainHint} to send from.`,
+        message: `You don't have a ${tokenSymbol} balance on ${chainHint} to send from.`,
       };
     }
     chain = match.chain;
   } else if (fundedChains.length > 1) {
-    const list = fundedChains.map((b) => `${b.chain} (${formatAmount(b.availableBalance)} ${env.defaultTokenSymbol})`).join(", ");
+    const list = fundedChains.map((b) => `${b.chain} (${formatAmount(b.availableBalance)} ${tokenSymbol})`).join(", ");
     return { ok: false, message: `Which chain would you like to send from? You have balance on: ${list}.` };
   } else {
     chain = fundedChains[0]?.chain ?? wallet.chain;
+  }
+
+  // EVM chains validate token support via chains.ts's token map (e.g. USDT
+  // on Base isn't configured) — only reachable here via the zero-balance
+  // fallback-to-wallet.chain path above, since a funded balance can't exist
+  // for a token/chain pair chains.ts never enabled in the first place.
+  // Stellar/Solana are already covered by the fundedChains check itself.
+  if (["celo", "base", "optimism"].includes(chain.toLowerCase())) {
+    try {
+      getTokenConfig(chain, tokenSymbol);
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // Moved here (after chain is known) rather than resolved eagerly at the
@@ -195,7 +217,7 @@ async function finalizeRemittanceDraft(
 
   if (isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency)) {
     try {
-      const selection = await selectOfframpProvider({ chain, amount: netAmount, fiatCurrency });
+      const selection = await selectOfframpProvider({ chain, token: tokenSymbol, amount: netAmount, fiatCurrency });
       console.log(`[remittance-draft] provider selection for ${chain}: ${selection.provider} (toAmount=${selection.toAmount})`);
       if (selection.provider === "quidax") {
         const altInstitutions = await getQuidaxInstitutions(fiatCurrency);
@@ -290,14 +312,14 @@ async function finalizeRemittanceDraft(
 
   async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {
     if (p === "quidax" && altRecipient) {
-      return createQuidaxOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: altRecipient, reference });
+      return createQuidaxOrder({ amount: netAmount, network: chain, token: tokenSymbol, fiatCurrency, recipient: altRecipient, reference });
     }
     if (p === "centiiv" && altRecipient) {
-      return createCentiivOrder({ amount: netAmount, network: chain, fiatCurrency, recipient: altRecipient, reference });
+      return createCentiivOrder({ amount: netAmount, network: chain, token: tokenSymbol, fiatCurrency, recipient: altRecipient, reference });
     }
     return createOfframpOrder({
       amount: netAmount,
-      token: env.defaultTokenSymbol,
+      token: tokenSymbol,
       network: chain,
       refundAddress: walletAddress,
       fiatCurrency,
@@ -377,8 +399,9 @@ async function finalizeRemittanceDraft(
       validUntil: order.validUntil,
       chain,
       provider,
+      tokenSymbol,
     },
-    summary: `Ready to send $${amountStr} to ${recipient.accountName}${fiatCountryLabel}${payoutEstimate}. Fee: ${feeAmount} ${env.defaultTokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to send $${amountStr} to ${recipient.accountName}${fiatCountryLabel}${payoutEstimate}. Fee: ${feeAmount} ${tokenSymbol}. This quote is locked for about an hour — confirm in the app to enter your PIN and complete it.`,
   };
 }
 
@@ -422,6 +445,7 @@ export async function resolveRemittanceIntent(
         ` (${saved.institutionName})`,
         recipient,
         intent.chainHint,
+        intent.tokenHint,
       );
     }
   }
@@ -509,5 +533,6 @@ export async function resolveRemittanceIntent(
     ` (${matched.name}) in ${country.name}`,
     recipient,
     intent.chainHint,
+    intent.tokenHint,
   );
 }

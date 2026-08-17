@@ -35,6 +35,7 @@ offrampRouter.get("/offramp/rate", async (req: Request, res: Response) => {
   try {
     const selection = await selectOfframpProvider({
       chain: parsed.data.network,
+      token: parsed.data.token,
       amount: parsed.data.amount,
       fiatCurrency: parsed.data.fiatCurrency,
     });
@@ -128,6 +129,9 @@ const ExistingOrderSchema = z.object({
   // required now that remittanceDraft.ts can lock either provider, not
   // just Paycrest (see service.ts's LockedOrder for why this matters).
   provider: z.enum(["paycrest", "quidax", "centiiv"]),
+  // Which token this order was actually quoted/created for — omitted means
+  // USDC (see service.ts's LockedOrder.tokenSymbol comment).
+  tokenSymbol: z.string().min(1).optional(),
 });
 
 const CreateSendSchema = z.object({
@@ -146,6 +150,9 @@ const CreateSendSchema = z.object({
   // GET /offramp/rate and GET /offramp/institutions?provider=). Omitted
   // means Paycrest, unchanged from before Quidax existed.
   provider: z.enum(["paycrest", "quidax", "centiiv"]).optional(),
+  // Which token to send — omitted means USDC, unchanged from before USDT
+  // support existed.
+  tokenSymbol: z.string().min(1).optional(),
 });
 
 offrampRouter.post("/offramp/sends", requireAuth, async (req: Request, res: Response) => {

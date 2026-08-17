@@ -12,7 +12,7 @@ import {
   parseUnits,
 } from "viem";
 import { env } from "../../config/env.js";
-import { getChainConfig } from "./chains.js";
+import { getChainConfig, getTokenConfig } from "./chains.js";
 import { PayoutLiquidityError, type CreatedWallet, type WalletAdapter, type WithdrawInput, type WithdrawResult } from "./adapter.js";
 import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
 
@@ -202,24 +202,23 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     };
   },
 
-  // Phase 2/6: real signing + broadcasting, USDC only, on any chain listed
-  // in chains.ts (getChainConfig throws clearly for anything else). Pays
-  // out from a single designated KMS key (AWS_KMS_PAYOUT_KEY_ARN) rather
-  // than per-user signing — mirrors Blockradar's own master-wallet model
-  // today (one wallet, pooled by auto-sweep, pays every send out),
-  // avoiding nonce-management complexity across many keys. Note: this
-  // makes withdraw() mechanically capable of paying out on any supported
-  // chain, but nothing here decides *which* chain to use when the payout
-  // key's USDC balance is fragmented across several — that's the caller's
-  // call (currently always wallet.chain — see the Phase 6 plan).
+  // Phase 2/6: real signing + broadcasting, for any token/chain pair listed
+  // in chains.ts's per-chain token map (getTokenConfig throws clearly for
+  // anything else — e.g. USDT on Base). Pays out from a single designated
+  // KMS key (AWS_KMS_PAYOUT_KEY_ARN) rather than per-user signing — mirrors
+  // Blockradar's own master-wallet model today (one wallet, pooled by
+  // auto-sweep, pays every send out), avoiding nonce-management complexity
+  // across many keys. Note: this makes withdraw() mechanically capable of
+  // paying out on any supported chain, but nothing here decides *which*
+  // chain to use when the payout key's balance is fragmented across
+  // several — that's the caller's call (currently always wallet.chain —
+  // see the Phase 6 plan).
   async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
-    if (input.tokenSymbol.toUpperCase() !== "USDC") {
-      throw new Error(`aws-kms withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
-    }
     if (!env.awsKmsPayoutKeyArn) {
       throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set when WALLET_PROVIDER=aws-kms");
     }
-    const { viemChain, rpcUrl, usdcAddress, usdcDecimals } = getChainConfig(input.chain);
+    const { viemChain, rpcUrl } = getChainConfig(input.chain);
+    const { address: tokenAddress, decimals: tokenDecimals } = getTokenConfig(input.chain, input.tokenSymbol);
 
     const client = kmsClient();
     const payoutAddress = await fetchAddressForKey(client, env.awsKmsPayoutKeyArn);
@@ -233,7 +232,7 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     const data = encodeFunctionData({
       abi: ERC20_TRANSFER_ABI,
       functionName: "transfer",
-      args: [input.toAddress as `0x${string}`, parseUnits(input.amount, usdcDecimals)],
+      args: [input.toAddress as `0x${string}`, parseUnits(input.amount, tokenDecimals)],
     });
 
     const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
@@ -246,7 +245,7 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     // failure while the transaction actually lands). Revert/confirmation
     // checking is deliberately deferred — see the Phase 2 plan.
     async function send(nonce: number): Promise<`0x${string}`> {
-      return walletClient.sendTransaction({ to: usdcAddress, data, value: 0n, nonce });
+      return walletClient.sendTransaction({ to: tokenAddress, data, value: 0n, nonce });
     }
 
     let txHash: `0x${string}`;
