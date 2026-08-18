@@ -24,6 +24,20 @@ export async function pollPendingSettlements(): Promise<void> {
       const nextState = resolveNextSendState(event, send.state);
       if (!nextState) continue; // same status as last check, or not a recognized/forward-moving one
 
+      // Mirrors centiivSettlementPoller.ts's own fix, for the same reason:
+      // amountPaid is Paycrest's equivalent "did money actually move"
+      // signal, separate from the top-level status string. A refunded/
+      // expired order that still shows a real amountPaid would mean their
+      // own data disagrees with itself — auto-crediting the user in that
+      // case risks double-paying them, so it's held for manual review
+      // instead of trusted blindly.
+      if ((nextState === "FAILED" || nextState === "REFUNDED") && Number(orderStatus.amountPaid ?? 0) > 0) {
+        console.error(
+          `[paycrest-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${orderStatus.status}" but a non-zero amountPaid (${orderStatus.amountPaid}) — Paycrest's own data contradicts itself. NOT auto-crediting; needs manual review.`,
+        );
+        continue;
+      }
+
       await withTransaction(async (client) => {
         if (nextState === "FAILED" || nextState === "REFUNDED") {
           await applyTerminalFailureTransition(

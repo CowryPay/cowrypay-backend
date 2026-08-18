@@ -254,6 +254,12 @@ export interface CentiivRequestStatus {
   id: string;
   status: string;
   rate: string | null;
+  // Real incident this exists to close: a live order's top-level `status`
+  // said "REFUNDED" while this same array had a real entry showing Centiiv
+  // had actually paid the recipient — their own data contradicting itself.
+  // centiivSettlementPoller.ts treats a non-empty array here as reason to
+  // NOT trust `status` alone before auto-refunding the user.
+  fulfillments: Array<Record<string, unknown>>;
 }
 
 // GET /requests/:id — same shape as the create response. `status` only
@@ -261,8 +267,11 @@ export interface CentiivRequestStatus {
 // a terminal value) — centiivSettlementPoller.ts deliberately does NOT
 // guess a "COMPLETED"-shaped string for this reason, see its own comment.
 export async function getOrderStatus(orderId: string): Promise<CentiivRequestStatus> {
-  const result = await centiivFetch<{ id: string; status: string; metadata: { rate: string | null } }>(
-    `/requests/${orderId}`,
-  );
-  return { id: result.id, status: result.status, rate: result.metadata.rate };
+  const result = await centiivFetch<{
+    id: string;
+    status: string;
+    metadata: { rate: string | null };
+    fulfillments?: Array<Record<string, unknown>>;
+  }>(`/requests/${orderId}`);
+  return { id: result.id, status: result.status, rate: result.metadata.rate, fulfillments: result.fulfillments ?? [] };
 }

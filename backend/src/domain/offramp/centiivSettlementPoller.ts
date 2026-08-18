@@ -42,6 +42,21 @@ export async function pollPendingSettlements(): Promise<void> {
         continue;
       }
 
+      // Real incident: a live order's status said "REFUNDED" while its own
+      // fulfillments array showed Centiiv had actually paid the recipient
+      // in full — confirmed by the payout amount matching this order's
+      // amount at their own quoted rate almost exactly. Auto-crediting the
+      // user in that case would double-pay them (real fiat already landed
+      // in their bank AND their CowryPay balance restored) — held for
+      // manual review instead, same conservative stance Quidax's poller
+      // already takes for its own less-trustworthy status field.
+      if ((nextState === "FAILED" || nextState === "REFUNDED") && status.fulfillments.length > 0) {
+        console.error(
+          `[centiiv-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${status.status}" but a non-empty fulfillments array — Centiiv's own data contradicts itself. NOT auto-crediting; needs manual review. Fulfillments: ${JSON.stringify(status.fulfillments)}`,
+        );
+        continue;
+      }
+
       await withTransaction(async (client) => {
         if (nextState === "FAILED" || nextState === "REFUNDED") {
           // Credits the user back the full original amount, same policy as
