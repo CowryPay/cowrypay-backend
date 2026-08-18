@@ -177,6 +177,24 @@ const CorrectSendStateSchema = z.object({
 // tracing confirmed the crypto never returned to our registered refund
 // address either.
 //
+// Read-only lookup by send ID, with full transition history — a direct
+// complement to /admin/sends (chain-scoped listing) and the wallet-address-
+// keyed ledger-audit, neither of which work well for tracing one specific
+// send: Stellar wallet rows all share one on-chain address (no per-user
+// address to look up by), so /admin/wallets/:address/... resolves to
+// whichever user's row happens to match first, not necessarily the one
+// who actually owns a given send.
+adminRouter.get("/admin/sends/:id", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const send = await sendsRepo.findById(req.params.id);
+  if (!send) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const transitions = await sendsRepo.getTransitions(send.id);
+  res.json({ send, transitions });
+});
+
 // Deliberately a pure audit correction, NOT applyTerminalFailureTransition
 // (sendStateTransition.ts) — that helper always credits the send's user
 // back, which is the right call when OUR system is the one that failed a
