@@ -191,8 +191,11 @@ adminRouter.get("/admin/sends/:id", async (req: Request, res: Response) => {
     res.status(404).json({ error: "not found" });
     return;
   }
-  const transitions = await sendsRepo.getTransitions(send.id);
-  res.json({ send, transitions });
+  const [transitions, userBalances] = await Promise.all([
+    sendsRepo.getTransitions(send.id),
+    ledgerRepo.getBalancesForUser(send.userId),
+  ]);
+  res.json({ send, transitions, userBalances });
 });
 
 // Deliberately a pure audit correction, NOT applyTerminalFailureTransition
