@@ -8,6 +8,16 @@ function required(name: string): string {
 
 export const env = {
   port: Number(process.env.PORT) || 3001,
+  // This service's own public URL — needed to verify a third-party
+  // webhook (Helius) is actually configured to call back to THIS
+  // environment. Real incident this exists to catch: production's Helius
+  // webhook was silently pointed at staging's URL, so every Solana
+  // deposit for every production user went to the wrong server with no
+  // error anywhere (see solanaWebhookReconciler.ts). No hardcoded
+  // fallback — a wrong guess here would be worse than an explicit unset
+  // (the reconciler just skips its URL check rather than risk
+  // "correcting" a webhook to a wrong guessed URL).
+  publicBaseUrl: process.env.PUBLIC_BASE_URL,
   databaseUrl: required("DATABASE_URL"),
   databaseSsl: process.env.DATABASE_SSL !== "false",
   supabaseUrl: required("SUPABASE_URL"),

@@ -13,6 +13,7 @@ import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
 import { ledgerRepo } from "../domain/ledger/repository.js";
 import { depositsRepo } from "../domain/deposits/repository.js";
+import { reconcileSolanaWebhookAddresses } from "../domain/monitoring/solanaWebhookReconciler.js";
 
 export const adminRouter = Router();
 
@@ -512,5 +513,19 @@ adminRouter.post("/admin/users/:userId/adjust-ledger", async (req: Request, res:
     res.json({ ok: true, balance });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Manual trigger for the periodic reconciler (see solanaWebhookReconciler.ts)
+// — lets a fix land immediately instead of waiting up to 10 minutes for the
+// next scheduled cycle, e.g. right after a deploy meant to backfill
+// addresses missed by the per-wallet-creation registration's own race.
+adminRouter.post("/admin/solana/reconcile-webhook", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  try {
+    await reconcileSolanaWebhookAddresses();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });

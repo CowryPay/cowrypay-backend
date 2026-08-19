@@ -32,6 +32,7 @@ import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScan
 import { startSolanaDepositSweeper } from "./domain/wallets/solanaDepositSweeper.js";
 import { startGasStatusMonitor } from "./domain/monitoring/gasStatusMonitor.js";
 import { startDoubleCreditMonitor } from "./domain/monitoring/doubleCreditMonitor.js";
+import { startSolanaWebhookReconciler } from "./domain/monitoring/solanaWebhookReconciler.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -70,3 +71,4 @@ startStellarDepositScanner();
 startSolanaDepositSweeper();
 startGasStatusMonitor();
 startDoubleCreditMonitor();
+startSolanaWebhookReconciler();
