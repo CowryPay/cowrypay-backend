@@ -1,54 +1,20 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { env } from "../config/env.js";
 import { depositsRepo } from "../domain/deposits/repository.js";
-import { ingestDeposit, resolveManualReview } from "../domain/deposits/stateMachine.js";
-import { walletsRepo } from "../domain/wallets/repository.js";
+import { resolveManualReview } from "../domain/deposits/stateMachine.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireAdminKey } from "../middleware/requireAdminKey.js";
 
 export const depositsRouter = Router();
 
-const DepositWebhookSchema = z.object({
-  address: z.string(),
-  chain: z.string().optional(),
-  txHash: z.string(),
-  amount: z.string().regex(/^\d+(\.\d+)?$/, "amount must be a decimal string"),
-  tokenSymbol: z.string().optional(),
-});
-
-// Stub for the real Blockradar deposit webhook (§7.4) — same request shape
-// and idempotency contract, so swapping the caller later is a no-op here.
-depositsRouter.post("/webhooks/deposit", async (req: Request, res: Response) => {
-  const parsed = DepositWebhookSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
-    return;
-  }
-  const { address, txHash, amount } = parsed.data;
-  const chain = parsed.data.chain ?? env.defaultChain;
-  const tokenSymbol = parsed.data.tokenSymbol ?? env.defaultTokenSymbol;
-
-  const wallet = await walletsRepo.findByAddress(address);
-  if (!wallet) {
-    res.status(404).json({ error: "no wallet registered for this address" });
-    return;
-  }
-
-  try {
-    const result = await ingestDeposit({
-      userId: wallet.userId,
-      walletId: wallet.id,
-      tokenSymbol,
-      amount,
-      chain,
-      txHash,
-    });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
+// The original POST /webhooks/deposit stub that lived here (§7.4, pre-dating
+// the real Blockradar/Stellar/Solana deposit paths) was removed — it had no
+// signature or auth check of any kind and called ingestDeposit directly, so
+// anyone could credit their own ledger with an arbitrary amount by POSTing
+// a fake txHash. Every real deposit path (routes/blockradarWebhook.ts,
+// routes/solanaWebhook.ts, the Stellar/EVM scanners) verifies a signature
+// or reads directly from a chain before crediting anything; this stub
+// verified nothing and was never referenced anywhere else in the codebase.
 
 depositsRouter.get("/deposits", requireAuth, async (req: Request, res: Response) => {
   const deposits = await depositsRepo.getForUser(req.authUser!.id, 20);

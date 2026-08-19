@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
 import { env } from "../../config/env.js";
 
@@ -7,9 +8,17 @@ import { env } from "../../config/env.js";
 // webhook-creation time via the `authHeader` field — not an HMAC-over-body
 // scheme like Blockradar/Paycrest use. Isolated in its own function so
 // swapping providers later only touches this one place.
+//
+// Constant-time comparison — every other webhook verifier in this codebase
+// (Blockradar, Paycrest) already avoids a plain === here; this one didn't,
+// leaking timing information per matching byte of the shared secret.
 export function verifySolanaWebhookAuth(req: Request): boolean {
   if (!env.solanaWebhookSecret) return false;
-  return req.header("authorization") === env.solanaWebhookSecret;
+  const provided = req.header("authorization");
+  if (!provided) return false;
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(env.solanaWebhookSecret);
+  return providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf);
 }
 
 export interface NormalizedSolanaTransfer {

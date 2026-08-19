@@ -41,9 +41,16 @@ export async function checkPendingCryptoWithdrawals(): Promise<void> {
       }
 
       // status === "reverted" — definitive and final, safe to auto-refund.
+      // CAS-guarded: an overlapping poller tick (e.g. a slow RPC call
+      // overrunning the 30s interval) could otherwise read this same
+      // still-BROADCAST row twice and credit the ledger twice for one
+      // reverted withdrawal.
       await withTransaction(async (client) => {
+        const updated = await cryptoWithdrawalsRepo.updateStateIfCurrent(client, withdrawal.id, withdrawal.state, {
+          state: "FAILED",
+        });
+        if (!updated) return; // lost the race — another tick already handled this
         await ledgerRepo.creditAvailable(client, withdrawal.userId, withdrawal.tokenSymbol, withdrawal.chain, withdrawal.amountHuman);
-        await cryptoWithdrawalsRepo.updateState(client, withdrawal.id, { state: "FAILED" });
         await cryptoWithdrawalsRepo.logTransition(
           client,
           withdrawal.id,

@@ -76,6 +76,28 @@ export const cryptoWithdrawalsRepo = {
     return mapWithdrawal(rows[0]);
   },
 
+  // CAS guard — closes a real double-credit race: checkPendingCryptoWithdrawals
+  // runs on a 30s setInterval with no re-entrancy guard, so an RPC call
+  // slow enough to overrun one cycle lets the next tick start while the
+  // first is still mid-flight; both would read the same still-BROADCAST
+  // row and, without this guard, both independently credit the ledger for
+  // the same reverted withdrawal. Only the update whose expectedCurrentState
+  // still matches wins; the loser gets null back and no-ops. Mirrors
+  // sendsRepo.updateStateIfCurrent exactly.
+  async updateStateIfCurrent(
+    client: PoolClient,
+    id: string,
+    expectedCurrentState: CryptoWithdrawalState,
+    input: { state: CryptoWithdrawalState; withdrawTxHash?: string | null },
+  ): Promise<CryptoWithdrawal | null> {
+    const { rows } = await client.query(
+      `update crypto_withdrawals set state = $2, withdraw_tx_hash = coalesce($3, withdraw_tx_hash), updated_at = now()
+       where id = $1 and state = $4 returning *`,
+      [id, input.state, input.withdrawTxHash ?? null, expectedCurrentState],
+    );
+    return rows[0] ? mapWithdrawal(rows[0]) : null;
+  },
+
   async updateState(
     client: PoolClient,
     id: string,

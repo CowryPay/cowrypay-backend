@@ -9,7 +9,13 @@ setDefaultResultOrder("ipv4first");
 
 export const pool = new Pool({
   connectionString: env.databaseUrl,
-  ssl: env.databaseSsl ? { rejectUnauthorized: false } : undefined,
+  // rejectUnauthorized: false previously left every query MITM-able by
+  // anyone positioned on the network path (DNS hijack, ARP spoof in a
+  // shared VPC, compromised proxy) — the connection was encrypted but the
+  // server's certificate was never actually validated. Supabase's pooler
+  // uses a publicly-trusted certificate chain (not self-signed), so the
+  // default Node root store is enough here — no custom CA needed.
+  ssl: env.databaseSsl ? { rejectUnauthorized: true } : undefined,
   // Without these, a flaky network path to the DB hangs a request forever
   // instead of failing with a clear error — connectionTimeoutMillis bounds
   // how long to wait for a new connection, statement_timeout bounds how

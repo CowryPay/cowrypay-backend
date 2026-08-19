@@ -1,5 +1,18 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { env } from "../config/env.js";
+
+// Plain !== comparison leaks timing information per matching byte — this
+// key is the only gate on routes that move real treasury funds and
+// arbitrarily adjust user ledgers, so it gets the same constant-time
+// treatment already used for PIN verification (pin/hash.ts). Length is
+// checked first since timingSafeEqual throws (rather than just returning
+// false) on a length mismatch.
+function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
+}
 
 // No role/permission system exists yet — gated by a shared secret header
 // instead of requireAuth (a real user JWT proves identity, not admin
@@ -11,7 +24,8 @@ export function requireAdminKey(req: Request, res: Response): boolean {
     res.status(503).json({ error: "admin endpoint not configured" });
     return false;
   }
-  if (req.header("x-admin-key") !== env.adminApiKey) {
+  const provided = req.header("x-admin-key");
+  if (!provided || !safeEqual(provided, env.adminApiKey)) {
     res.status(401).json({ error: "invalid admin key" });
     return false;
   }
@@ -29,7 +43,9 @@ export function requireMetricsKey(req: Request, res: Response): boolean {
     return false;
   }
   const provided = req.header("x-admin-key");
-  if (provided !== env.adminApiKey && provided !== env.adminMetricsKey) {
+  const matchesAdmin = !!provided && !!env.adminApiKey && safeEqual(provided, env.adminApiKey);
+  const matchesMetrics = !!provided && !!env.adminMetricsKey && safeEqual(provided, env.adminMetricsKey);
+  if (!matchesAdmin && !matchesMetrics) {
     res.status(401).json({ error: "invalid admin key" });
     return false;
   }

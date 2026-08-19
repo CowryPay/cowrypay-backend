@@ -44,10 +44,16 @@ export async function checkPendingWithdrawals(): Promise<void> {
       // status === "reverted" — a definitive, final on-chain outcome
       // (unlike the ambiguous "200, no hash yet" pending state that caused
       // the earlier Blockradar double-spend bug), so refunding and marking
-      // FAILED automatically here is safe.
+      // FAILED automatically here is safe. CAS-guarded via
+      // updateStateIfCurrent (same pattern already established in
+      // sendStateTransition.ts's applyTerminalFailureTransition) — a
+      // plain unconditional updateState here would let an overlapping
+      // poller tick (a slow RPC call overrunning the 30s interval) credit
+      // the same reverted send's refund twice.
       await withTransaction(async (client) => {
+        const updated = await sendsRepo.updateStateIfCurrent(client, send.id, send.state, { state: "FAILED" });
+        if (!updated) return; // lost the race — another tick already handled this
         await ledgerRepo.creditAvailable(client, send.userId, send.tokenSymbol, send.chain, send.amountHuman);
-        await sendsRepo.updateState(client, send.id, { state: "FAILED" });
         await sendsRepo.logTransition(client, send.id, send.state, "FAILED", `kms_withdraw_reverted:${send.withdrawTxHash}`);
       });
     } catch (err) {
