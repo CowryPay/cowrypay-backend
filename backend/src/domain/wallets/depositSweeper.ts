@@ -5,6 +5,7 @@ import { kmsAccountFromKey, getWalletAddress } from "./awsKmsAdapter.js";
 import { getReceiptStatus } from "./receiptStatus.js";
 import { getChainConfig, getTokenConfig, SUPPORTED_CHAINS, MIN_SWEEP_TOKEN_AMOUNT } from "./chains.js";
 import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
+import { withAdvisoryLock } from "../../db/advisoryLock.js";
 
 const ERC20_ABI = [
   {
@@ -90,16 +91,19 @@ export async function sweepWallet(
     // incident). A separate, file-local nonce cache here would just
     // recreate that bug between this function and withdraw().
     const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payout.address);
-    let topUpHash: `0x${string}`;
-    try {
-      const nonce = await claimNonce(chain, fetchFreshNonce);
-      topUpHash = await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce });
-    } catch (err) {
-      if (!isNonceError(err)) throw err;
-      resyncNonce(chain);
-      const freshNonce = await claimNonce(chain, fetchFreshNonce);
-      topUpHash = await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce: freshNonce });
-    }
+    // Cross-process safety net, same lock key awsKmsAdapter.ts's withdraw()
+    // uses for this same payout wallet — see advisoryLock.ts's own comment.
+    const topUpHash: `0x${string}` = await withAdvisoryLock(`evm-nonce:${chain}`, async () => {
+      try {
+        const nonce = await claimNonce(chain, fetchFreshNonce);
+        return await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce });
+      } catch (err) {
+        if (!isNonceError(err)) throw err;
+        resyncNonce(chain);
+        const freshNonce = await claimNonce(chain, fetchFreshNonce);
+        return await payoutWalletClient.sendTransaction({ to: address, value: gasTopUpAmount, nonce: freshNonce });
+      }
+    });
 
     let confirmed = false;
     for (let attempt = 0; attempt < TOPUP_CONFIRM_ATTEMPTS; attempt++) {

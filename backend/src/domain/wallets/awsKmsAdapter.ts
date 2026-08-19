@@ -15,6 +15,7 @@ import { env } from "../../config/env.js";
 import { getChainConfig, getTokenConfig } from "./chains.js";
 import { PayoutLiquidityError, type CreatedWallet, type WalletAdapter, type WithdrawInput, type WithdrawResult } from "./adapter.js";
 import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
+import { withAdvisoryLock } from "../../db/advisoryLock.js";
 
 function requireAwsConfig(): { region: string; accessKeyId: string; secretAccessKey: string } {
   if (!env.awsRegion || !env.awsAccessKeyId || !env.awsSecretAccessKey) {
@@ -250,19 +251,26 @@ export const awsKmsWalletAdapter: WalletAdapter = {
 
     let txHash: `0x${string}`;
     try {
-      const nonce = await claimNonce(input.chain, fetchFreshNonce);
-      try {
-        txHash = await send(nonce);
-      } catch (err) {
-        // The in-memory nonce cache turned out to be wrong (first use
-        // after a restart racing an old transaction, or truly out-of-band
-        // activity on this key) — resync from the chain and retry exactly
-        // once with a freshly-fetched nonce before giving up.
-        if (!isNonceError(err)) throw err;
-        resyncNonce(input.chain);
-        const freshNonce = await claimNonce(input.chain, fetchFreshNonce);
-        txHash = await send(freshNonce);
-      }
+      // Cross-process safety net around evmNonce.ts's in-memory cache —
+      // see advisoryLock.ts's own comment for why this exists. Scoped per
+      // chain, same lock key depositSweeper.ts's gas top-up uses, since
+      // both send from this same payout wallet and must exclude each
+      // other too, not just other withdraw() calls.
+      txHash = await withAdvisoryLock(`evm-nonce:${input.chain}`, async () => {
+        const nonce = await claimNonce(input.chain, fetchFreshNonce);
+        try {
+          return await send(nonce);
+        } catch (err) {
+          // The in-memory nonce cache turned out to be wrong (first use
+          // after a restart racing an old transaction, or truly out-of-band
+          // activity on this key) — resync from the chain and retry exactly
+          // once with a freshly-fetched nonce before giving up.
+          if (!isNonceError(err)) throw err;
+          resyncNonce(input.chain);
+          const freshNonce = await claimNonce(input.chain, fetchFreshNonce);
+          return await send(freshNonce);
+        }
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // The user's own ledger balance was already checked and atomically

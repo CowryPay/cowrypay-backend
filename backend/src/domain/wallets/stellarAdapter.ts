@@ -3,6 +3,7 @@ import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 import { stellarMemoRepo } from "./stellarMemoRepository.js";
 import { getStellarSigningKeypair } from "./stellarKms.js";
+import { withAdvisoryLock } from "../../db/advisoryLock.js";
 
 function requireStellarDepositAddress(): string {
   if (!env.stellarDepositAddress) {
@@ -27,6 +28,13 @@ const networkPassphrase = env.stellarNetwork === "public" ? Networks.PUBLIC : Ne
 // with tx_bad_seq, not a graceful retry. Serialized here with a simple
 // promise chain: at most one loadAccount->build->sign->submit cycle runs at
 // a time, regardless of how many callers invoke withdraw() concurrently.
+// This alone only protects callers within ONE process — see
+// advisoryLock.ts's own comment for why that's not actually guaranteed.
+// The withdraw() call below wraps this with a cross-process advisory lock
+// too: this in-memory queue stays as the fast path for same-process calls
+// (no DB round trip needed to know "am I the only one in this process
+// wanting the lock right now"), the advisory lock is the real safety net
+// for the case this queue alone can't cover.
 let withdrawQueue: Promise<unknown> = Promise.resolve();
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
   const result = withdrawQueue.then(fn, fn);
@@ -66,7 +74,7 @@ export const stellarWalletAdapter: WalletAdapter = {
     const keypair = await getStellarSigningKeypair();
     const server = new Horizon.Server(env.stellarHorizonUrl);
 
-    return serialize(async () => {
+    return serialize(() => withAdvisoryLock("stellar-sequence", async () => {
       const account = await server.loadAccount(keypair.publicKey());
       const usdc = new Asset("USDC", issuer);
 
@@ -94,6 +102,6 @@ export const stellarWalletAdapter: WalletAdapter = {
         // needed beyond a clear message.
         throw new Error(`Stellar payment failed: ${extractHorizonErrorDetail(err)}`);
       }
-    });
+    }));
   },
 };
