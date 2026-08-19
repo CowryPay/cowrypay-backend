@@ -74,12 +74,20 @@ export function buildStellarAddressMessage(wallet: Wallet): string {
 // No memo needed here, unlike Stellar — every Solana deposit address is
 // already unique per user (see solanaAdapter.ts), matching Solana's own
 // exchange-integration convention.
-export function buildSolanaAddressMessage(wallet: Wallet): string {
+//
+// `usdtReady` must only be true once ensureSolanaUsdtAta has actually run
+// for this address (see chat/service.ts's solana branch) — USDT's ATA
+// isn't created eagerly at signup anymore (solanaAdapter.ts), so telling a
+// user to send USDT before that call has completed could land a deposit
+// with nowhere to go.
+export function buildSolanaAddressMessage(wallet: Wallet, usdtReady = false): string {
   return [
     "Your CowryPay Solana deposit address:",
     wallet.address,
     "",
-    "Send USDC on the Solana network to that address — deposits are usually credited within moments of confirming on-chain.",
+    usdtReady
+      ? "Send USDC or USDT on the Solana network to that address — deposits are usually credited within moments of confirming on-chain."
+      : "Send USDC on the Solana network to that address — deposits are usually credited within moments of confirming on-chain.",
   ].join("\n");
 }
 

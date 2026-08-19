@@ -221,72 +221,71 @@ async function registerSolanaWebhookAddress(address: string): Promise<void> {
 // every other chain, a freshly-generated address is NOT immediately
 // deposit-ready: it needs SOL for rent-exemption and a created Associated
 // Token Account per token before it can actually receive it, so
-// createWallet pre-funds all of that from the treasury before returning —
-// both USDC's and USDT's ATA, not just USDC's, so a USDT deposit lands
-// cleanly too regardless of whether the sending party's own tooling would
-// have created the destination ATA itself.
+// createWallet pre-funds the address itself plus USDC's ATA — USDC is the
+// default/advertised token on Solana (buildSolanaAddressMessage only ever
+// tells a user to send USDC). USDT's ATA is deliberately NOT created here
+// anymore: every signup was paying ~2.1M lamports for a USDT ATA that the
+// large majority of users, who never touch USDT, never used — see
+// ensureSolanaUsdtAta below for the lazy on-demand equivalent, which must
+// be called before any product surface tells a user their Solana address
+// accepts USDT (skipping that would let a USDT deposit silently fail for
+// senders whose own wallet doesn't auto-create the destination ATA).
+async function fundAndCreateAta(
+  owner: ReturnType<typeof toAddress>,
+  address: string,
+  mint: ReturnType<typeof toAddress>,
+  solLamports: bigint,
+): Promise<void> {
+  const treasury = await getSolanaTreasurySigner();
+  const [ata] = await findAssociatedTokenPda({ owner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+
+  const transferIx = getTransferSolInstruction({ source: treasury, destination: owner, amount: lamports(solLamports) });
+  const createAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({ payer: treasury, ata, owner, mint });
+
+  try {
+    await signAndSendTransaction(treasury, [transferIx, createAtaIx]);
+  } catch (err) {
+    // Seen live: treasury runs low on SOL and the preflight simulation
+    // rejects the transfer with "insufficient lamports X, need Y" in its
+    // logs (RPC code -32002) — every route/chat layer above this just
+    // relays err.message verbatim, so the fix has to happen right here,
+    // at the one place that actually knows why this failed.
+    if (
+      isSolanaError(err, SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE) &&
+      err.context.logs?.some((line) => line.includes("insufficient lamports"))
+    ) {
+      console.error(`[solana-adapter] treasury ${treasury.address} is too low on SOL to fund ${address}'s ATA — needs topping up.`, err.context.logs);
+      throw new SolanaTreasuryLiquidityError(
+        `We're temporarily unable to set up your Solana deposit address due to a system issue on our end. ` +
+          `Please reach out to our Telegram community and we'll get this sorted for you: ${SUPPORT_TELEGRAM_LINK}`,
+      );
+    }
+    throw err;
+  }
+}
+
+// Lazy, idempotent counterpart to createWallet's eager USDC-only funding —
+// call this once, before any reply/response tells a user their existing
+// Solana address accepts USDT (chat's deposit-chain flow, GET
+// /wallets/solana?token=USDT, or any future surface). Safe to call more
+// than once for the same address: getCreateAssociatedTokenIdempotentInstructionAsync
+// no-ops on an ATA that already exists, so a second call just re-sends a
+// SOL transfer the account didn't need — cheap, and still correct, but
+// callers should still avoid calling it on every single message/request.
+export async function ensureSolanaUsdtAta(address: string): Promise<void> {
+  const owner = toAddress(address);
+  const usdtMint = toAddress(getSolanaMint("USDT"));
+  await fundAndCreateAta(owner, address, usdtMint, ATA_RENT_LAMPORTS);
+}
+
 export const solanaWalletAdapter: WalletAdapter = {
   async createWallet({ userId }): Promise<CreatedWallet> {
     void userId; // no per-user tagging mechanism analogous to KMS key tags here — the wallets row itself is the record
     const { address, ciphertext } = await generateAndEncryptSolanaKeyPair();
     const usdcMint = toAddress(getSolanaMint("USDC"));
-    const usdtMint = toAddress(getSolanaMint("USDT"));
-
-    const treasury = await getSolanaTreasurySigner();
     const owner = toAddress(address);
-    const [usdcAta] = await findAssociatedTokenPda({ owner, mint: usdcMint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
-    const [usdtAta] = await findAssociatedTokenPda({ owner, mint: usdtMint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
 
-    const transferIx = getTransferSolInstruction({
-      source: treasury,
-      destination: owner,
-      amount: lamports(SYSTEM_ACCOUNT_RENT_LAMPORTS + ATA_RENT_LAMPORTS * 2n),
-    });
-    const createUsdcAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
-      payer: treasury,
-      ata: usdcAta,
-      owner,
-      mint: usdcMint,
-    });
-    const createUsdtAtaIx = await getCreateAssociatedTokenIdempotentInstructionAsync({
-      payer: treasury,
-      ata: usdtAta,
-      owner,
-      mint: usdtMint,
-    });
-
-    // Must complete before returning — an address that exists but was
-    // never pre-funded is exactly the failure mode this whole step exists
-    // to prevent (an incoming transfer to it could fail or behave
-    // unpredictably depending on whether the sender's wallet happens to
-    // auto-create the recipient's ATA, which nothing guarantees). Throwing
-    // here is safe: ensureAccount/ensureStellarWallet's existing
-    // retry-on-conflict pattern already handles "concurrent call created
-    // this already" cleanly, so a hard failure just surfaces as a clean
-    // retry, not a silently broken wallet.
-    try {
-      await signAndSendTransaction(treasury, [transferIx, createUsdcAtaIx, createUsdtAtaIx]);
-    } catch (err) {
-      // Seen live: treasury runs low on SOL and the preflight simulation
-      // rejects the transfer with "insufficient lamports X, need Y" in its
-      // logs (RPC code -32002) — every route/chat layer above this just
-      // relays err.message verbatim, so the fix has to happen right here,
-      // at the one place that actually knows why this failed.
-      if (
-        isSolanaError(err, SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE) &&
-        err.context.logs?.some((line) => line.includes("insufficient lamports"))
-      ) {
-        console.error(
-          `[solana-adapter] treasury ${treasury.address} is too low on SOL to fund a new wallet — needs topping up.`,
-          err.context.logs,
-        );
-        throw new SolanaTreasuryLiquidityError(
-          `We're temporarily unable to set up your Solana deposit address due to a system issue on our end. ` +
-            `Please reach out to our Telegram community and we'll get this sorted for you: ${SUPPORT_TELEGRAM_LINK}`,
-        );
-      }
-      throw err;
-    }
+    await fundAndCreateAta(owner, address, usdcMint, SYSTEM_ACCOUNT_RENT_LAMPORTS + ATA_RENT_LAMPORTS);
 
     await registerSolanaWebhookAddress(address);
 

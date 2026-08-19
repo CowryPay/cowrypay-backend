@@ -142,4 +142,18 @@ export const depositsRepo = {
     );
     return rows.map(mapTransition);
   },
+
+  // Used by solanaAtaReclaimer.ts to tell "this ATA was created but this
+  // user has never actually deposited this token" (safe to close and
+  // reclaim the rent) apart from "this ATA is at zero right now only
+  // because it was just swept" (must NOT be closed — this user is active
+  // and will likely receive more). A wallet with any row here, regardless
+  // of state, has demonstrated real use of this token on this chain.
+  async hasAnyDeposit(walletId: string, tokenSymbol: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `select 1 from deposits where wallet_id = $1 and token_symbol = $2 limit 1`,
+      [walletId, tokenSymbol],
+    );
+    return rows.length > 0;
+  },
 };
