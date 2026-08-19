@@ -477,3 +477,40 @@ adminRouter.post("/admin/wallets/:address/adjust-ledger", async (req: Request, r
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+
+// Same operation as the address-keyed endpoint above, keyed by userId
+// directly instead — required for Stellar (and any other shared-address
+// chain), where findByAddress has no way to tell which of many users
+// sharing that one on-chain address a correction is actually meant for,
+// and would silently resolve to an arbitrary one. Use this whenever the
+// target user is already known (e.g. from /admin/deposits/by-hash), not
+// the address-keyed version, for any chain where the wallet address isn't
+// genuinely unique per user.
+adminRouter.post("/admin/users/:userId/adjust-ledger", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = AdjustLedgerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const { chain, tokenSymbol, amount, direction, note, actor } = parsed.data;
+  const userId = req.params.userId;
+  console.log(
+    `[admin] ledger adjustment: user ${userId} ${direction} ${amount} ${tokenSymbol} on ${chain} — actor=${actor}, note="${note}"`,
+  );
+
+  try {
+    const balance = await withTransaction(async (client) => {
+      if (direction === "credit") {
+        return ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, amount);
+      }
+      const result = await ledgerRepo.debitAvailable(client, userId, tokenSymbol, chain, amount);
+      if (!result) throw new Error("insufficient available balance for this debit");
+      return result;
+    });
+    res.json({ ok: true, balance });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
