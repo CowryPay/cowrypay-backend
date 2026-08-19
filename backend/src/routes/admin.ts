@@ -198,6 +198,31 @@ adminRouter.get("/admin/sends/:id", async (req: Request, res: Response) => {
   res.json({ send, transitions, userBalances });
 });
 
+// Same shape of gap as /admin/sends/:id above, for deposits: a Stellar
+// deposit's own wallet address is the shared on-chain address, not a
+// per-user one, so tracing a specific deposit report by its real tx hash
+// needs a lookup keyed on (chain, txHash), not on wallet address.
+adminRouter.get("/admin/deposits/by-hash", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const chain = typeof req.query.chain === "string" ? req.query.chain : undefined;
+  const txHash = typeof req.query.txHash === "string" ? req.query.txHash : undefined;
+  if (!chain || !txHash) {
+    res.status(400).json({ error: "chain and txHash query params are required" });
+    return;
+  }
+  const deposit = await depositsRepo.findByChainAndTxHash(chain, txHash);
+  if (!deposit) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const [transitions, userBalances, userDeposits] = await Promise.all([
+    depositsRepo.getTransitions(deposit.id),
+    ledgerRepo.getBalancesForUser(deposit.userId),
+    depositsRepo.getForUser(deposit.userId, 20),
+  ]);
+  res.json({ deposit, transitions, userBalances, userDeposits });
+});
+
 // Deliberately a pure audit correction, NOT applyTerminalFailureTransition
 // (sendStateTransition.ts) — that helper always credits the send's user
 // back, which is the right call when OUR system is the one that failed a
