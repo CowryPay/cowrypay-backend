@@ -529,3 +529,43 @@ adminRouter.post("/admin/solana/reconcile-webhook", async (req: Request, res: Re
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+
+const ManualIngestDepositSchema = z.object({
+  userId: z.string().min(1),
+  chain: z.string().min(1),
+  tokenSymbol: z.string().min(1),
+  amount: z.string().min(1),
+  txHash: z.string().min(1),
+  actor: z.string().min(1),
+});
+
+// General-purpose version of /admin/stellar/unmatched-deposits/:id/resolve
+// above, for any chain — a real deposit that automated detection missed
+// entirely (e.g. the Solana webhook registration bug just fixed) needs the
+// same replay-through-ingestDeposit path, not a one-off ledger credit.
+// Safe/idempotent if ever called twice, same reasoning as that endpoint:
+// ingestDeposit's own (chain, tx_hash) uniqueness makes a repeat call a
+// no-op rather than a double-credit.
+adminRouter.post("/admin/deposits/ingest", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = ManualIngestDepositSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const { userId, chain, tokenSymbol, amount, txHash, actor } = parsed.data;
+  const wallet = await walletsRepo.findByUserIdAndChain(userId, chain);
+  if (!wallet) {
+    res.status(400).json({ error: `that user has no ${chain} wallet on record` });
+    return;
+  }
+
+  console.log(`[admin] manual deposit ingest: user ${userId} ${amount} ${tokenSymbol} on ${chain} tx=${txHash} — actor=${actor}`);
+  try {
+    const result = await ingestDeposit({ userId, walletId: wallet.id, tokenSymbol, amount, chain, txHash });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
