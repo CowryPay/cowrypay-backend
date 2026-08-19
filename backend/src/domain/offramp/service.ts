@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { withTransaction } from "../../db/pool.js";
+import { withTransaction, pool } from "../../db/pool.js";
 import { env } from "../../config/env.js";
+import { lockedOrdersRepo } from "./lockedOrdersRepository.js";
 import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -146,71 +147,80 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     throw new Error("Incorrect PIN");
   }
 
+  // Real vulnerability closed here: input.existingOrder used to be trusted
+  // directly — receiveAddress (where the real payout broadcasts to) and
+  // treasuryAddress (where the platform fee sweeps to) came straight from
+  // the request body, gated only by a client-controlled validUntil string.
+  // Any authenticated user with a funded balance could fabricate an order
+  // pointing both at their own wallet and skip Paycrest/Quidax/Centiiv
+  // entirely. Only `.reference` is used now, to look up the SERVER-STORED
+  // record of what was actually created with a real provider (see
+  // lockedOrdersRepository.ts) — every field below comes from that record,
+  // never from the client. This lookup alone doesn't authorize spending
+  // anything yet; claim() inside the debit transaction below is what does.
+  let lockedPreview = null as Awaited<ReturnType<typeof lockedOrdersRepo.findByReference>>;
+  if (input.existingOrder?.reference) {
+    lockedPreview = await lockedOrdersRepo.findByReference(input.existingOrder.reference, userId, pool);
+    if (
+      !lockedPreview ||
+      lockedPreview.consumedAt ||
+      new Date(lockedPreview.validUntil).getTime() <= Date.now()
+    ) {
+      throw new Error("This quote is no longer valid — please start a new send.");
+    }
+  }
+
   // Every EVM chain (celo/base/optimism) shares one wallet row, always
   // registered under env.defaultChain — one KMS/Blockradar address covers
   // all of them, so "which EVM chain to send from" (input.chain) and
   // "which wallet row to look up" are different questions there. Stellar
   // is the one genuine exception: its shared-address wallet is its own
   // row, keyed under "stellar" specifically.
-  const walletChainKey = input.chain?.toLowerCase() === "stellar" ? "stellar" : env.defaultChain;
+  const effectiveChainInput = lockedPreview?.chain ?? input.chain;
+  const walletChainKey = effectiveChainInput?.toLowerCase() === "stellar" ? "stellar" : env.defaultChain;
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
-  const chain = input.chain ?? wallet.chain;
+  const chain = effectiveChainInput ?? wallet.chain;
   const walletAddress = wallet.address;
 
-  // A reused chat-locked order must debit the same token it was quoted
-  // against — see LockedOrder.tokenSymbol's own comment. Validated for EVM
-  // chains up front via chains.ts's token map (e.g. USDT on Base) so an
+  // A reused chat-locked order must debit the same token (and amount —
+  // see below) it was quoted against, so both come from the stored record,
+  // never from the request body, once one exists. Validated for EVM chains
+  // up front via chains.ts's token map (e.g. USDT on Base) so an
   // unsupported pairing fails clean, before any balance is touched.
-  const tokenSymbol = input.existingOrder?.tokenSymbol ?? input.tokenSymbol ?? env.defaultTokenSymbol;
+  const tokenSymbol = lockedPreview?.tokenSymbol ?? input.tokenSymbol ?? env.defaultTokenSymbol;
   if (["celo", "base", "optimism"].includes(chain.toLowerCase())) {
     getTokenConfig(chain, tokenSymbol);
   }
-
-  // Reuse the chat-locked order only if it hasn't expired by the time the
-  // user actually confirms — Paycrest quotes are only valid for ~1hr.
-  const reusable =
-    input.existingOrder && new Date(input.existingOrder.validUntil).getTime() > Date.now()
-      ? input.existingOrder
-      : null;
-
-  const reference = reusable?.reference ?? randomUUID();
-
-  // Real bug found live: a payout failure (e.g. PayoutLiquidityError, the
-  // payout wallet itself short on USDC) correctly refunds the ledger and
-  // marks that send FAILED, but does nothing to stop a client from
-  // retrying with the SAME still-unexpired chat-locked order — which
-  // reuses this same `reference`. sendsRepo.create's unique constraint on
-  // reference then throws a raw, unhandled Postgres error straight through
-  // to the user ("duplicate key value violates unique constraint
-  // sends_reference_key") instead of a message that explains anything.
-  // Checked before debiting the ledger again, not after, so a doomed
-  // retry never touches the user's balance at all.
-  if (reusable) {
-    const existing = await sendsRepo.findByReference(reference);
-    if (existing) {
-      if (existing.state === "FAILED" || existing.state === "REFUNDED") {
-        throw new Error(
-          "This transfer already failed on a previous attempt and can't be retried with the same quote — please start a new send.",
-        );
-      }
-      throw new Error("This transfer is already being processed — please wait a moment before trying again.");
-    }
-  }
+  const amount = lockedPreview?.amountHuman ?? input.amount;
+  const reference = lockedPreview?.reference ?? randomUUID();
 
   // Recomputed fresh even when reusing a chat-locked order — computeFeeSplit
   // is a pure function of amount + the fee bps, so this reproduces the exact
   // net amount Paycrest's order was created with (LockedOrder doesn't carry
   // it directly) as long as the fee bps hasn't changed mid-quote-window.
-  const { feeAmount, netAmount } = computeFeeSplit(input.amount);
-  const treasuryAddress = reusable?.treasuryAddress ?? (await requireTreasuryAddress(chain));
+  const { feeAmount, netAmount } = computeFeeSplit(amount);
+  const treasuryAddress = lockedPreview?.treasuryAddress ?? (await requireTreasuryAddress(chain));
 
   const send = await withTransaction(async (client) => {
+    // Claimed atomically alongside the debit below (not before it) so a
+    // legitimate insufficient-balance retry — which rolls the whole
+    // transaction back, claim included — still leaves the quote reusable.
+    // Returns null if this reference was already consumed (a replay) or
+    // never belonged to this user; either way, that's a hard stop, not
+    // something to fall back to a fresh order for.
+    if (lockedPreview) {
+      const claimed = await lockedOrdersRepo.claim(client, lockedPreview.reference, userId);
+      if (!claimed) {
+        throw new Error("This quote was already used or is no longer valid — please start a new send.");
+      }
+    }
+
     // Atomic decrement-with-guard (see ledgerRepo.debitAvailable) — two
     // concurrent sends can't both pass a balance check and double-spend the
     // same funds; whichever commits first wins, the other sees the reduced
     // balance and fails here.
-    const debited = await ledgerRepo.debitAvailable(client, userId, tokenSymbol, chain, input.amount);
+    const debited = await ledgerRepo.debitAvailable(client, userId, tokenSymbol, chain, amount);
     if (!debited) {
       throw new Error("Insufficient balance");
     }
@@ -220,7 +230,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       walletId: wallet.id,
       tokenSymbol,
       chain,
-      amountHuman: input.amount,
+      amountHuman: amount,
       fiatCurrency: input.fiatCurrency,
       recipient: input.recipient,
       reference,
@@ -236,7 +246,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // a fresh order dispatches to whichever provider the caller explicitly
   // chose (see InitiateSendInput.provider's own comment on why this isn't
   // re-decided here).
-  const provider: OfframpProvider = reusable?.provider ?? input.provider ?? "paycrest";
+  const provider: OfframpProvider = (lockedPreview?.provider as OfframpProvider | undefined) ?? input.provider ?? "paycrest";
   // Verified live: Paycrest structurally doesn't support Optimism/Solana/
   // Stellar at all (a hard "not supported" error, not a liquidity gap —
   // see paycrestAdapter.ts's own comment). A caller reaching here with
@@ -245,7 +255,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // validation error instead of an honest one — callers are expected to
   // use GET /offramp/rate first to pick an eligible provider, but this is
   // the last line of defense if they don't.
-  if (!reusable && provider === "paycrest" && !isPaycrestEligible(chain)) {
+  if (!lockedPreview && provider === "paycrest" && !isPaycrestEligible(chain)) {
     throw new Error(
       `Off-ramping from ${chain} isn't available via Paycrest — check GET /offramp/rate for which provider actually supports this chain.`,
     );
@@ -273,7 +283,16 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       rate: input.rate,
     });
   }
-  const order = reusable ?? (await createOrderForProvider());
+  // Every field here — orderId, receiveAddress, validUntil, rate — comes
+  // from the server-stored record when one exists, never from the client.
+  const order: CreatedOrder = lockedPreview
+    ? {
+        orderId: lockedPreview.providerOrderId,
+        receiveAddress: lockedPreview.receiveAddress,
+        validUntil: lockedPreview.validUntil,
+        rate: lockedPreview.rate,
+      }
+    : await createOrderForProvider();
 
   const updated = await withTransaction(async (client) => {
     const next = await sendsRepo.updateOrderCreated(client, send.id, {
@@ -286,7 +305,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       send.id,
       "SEND_INSTRUCTED",
       "ORDER_CREATED",
-      reusable ? "reused_chat_locked_order" : `${provider}_order_created`,
+      lockedPreview ? "reused_chat_locked_order" : `${provider}_order_created`,
     );
     return next;
   });
@@ -359,8 +378,10 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
     await withTransaction(async (client) => {
       // Refund — the balance was debited up front to prevent double-spending
       // across concurrent sends, but the payout never actually left custody,
-      // so the user's balance shouldn't reflect otherwise.
-      await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, input.amount);
+      // so the user's balance shouldn't reflect otherwise. Credits back
+      // `amount` (what was actually debited), not input.amount — the two
+      // can differ when a locked order's own stored amount overrode it.
+      await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, amount);
       await sendsRepo.updateState(client, updated.id, { state: "FAILED" });
       await sendsRepo.logTransition(
         client,
@@ -393,7 +414,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
 
     if (confirmation === "reverted") {
       await withTransaction(async (client) => {
-        await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, input.amount);
+        await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, amount);
         await sendsRepo.updateState(client, updated.id, { state: "FAILED", withdrawTxHash: payout.txHash });
         await sendsRepo.logTransition(
           client,
@@ -489,7 +510,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const recipientLabel = input.recipient.institutionName ?? input.recipient.institution;
   const message = [
     `⏳ Your transaction with the following details is processing:`,
-    `💸 Sent ${input.amount} ${tokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
+    `💸 Sent ${amount} ${tokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
       (fiatEstimate ? ` will receive ${input.fiatCurrency} ${fiatEstimate}` : ""),
     ``,
     `This usually completes within a few minutes — we'll update you once it's confirmed.`,

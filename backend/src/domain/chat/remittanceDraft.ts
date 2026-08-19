@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { pool } from "../../db/pool.js";
 import { env } from "../../config/env.js";
+import { lockedOrdersRepo } from "../offramp/lockedOrdersRepository.js";
 import {
   getCurrencySymbol,
   listSupportedCountries,
@@ -382,6 +384,34 @@ async function finalizeRemittanceDraft(
   const payoutEstimate = Number.isFinite(payout)
     ? ` (roughly ${getCurrencySymbol(fiatCurrency)}${payout.toLocaleString()})`
     : "";
+
+  // Persisted so initiateSend can look this exact order up by reference
+  // instead of trusting whatever the client echoes back in existingOrder —
+  // see lockedOrdersRepository.ts's own comment for the vulnerability this
+  // closes. Best-effort in the sense that a failure here shouldn't block
+  // the user from seeing their quote, but it's the only thing that makes
+  // POST /offramp/sends's reuse path safe, so it's logged loudly (not
+  // silently swallowed) if it ever fails.
+  try {
+    await lockedOrdersRepo.create(pool, {
+      reference,
+      userId,
+      chain,
+      tokenSymbol,
+      fiatCurrency,
+      amountHuman: amountStr,
+      feeAmount,
+      treasuryAddress,
+      provider,
+      providerOrderId: order.orderId,
+      receiveAddress: order.receiveAddress,
+      rate: order.rate,
+      recipient: finalRecipient,
+      validUntil: order.validUntil,
+    });
+  } catch (err) {
+    console.error(`[remittance-draft] failed to persist locked order for reference ${reference}:`, err);
+  }
 
   return {
     ok: true,
