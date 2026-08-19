@@ -26,60 +26,6 @@ adminRouter.get("/admin/overview", async (req: Request, res: Response) => {
   res.json(overview);
 });
 
-// TEMPORARY — captures the exact certificate chain Supabase's pooler
-// presents to THIS app (run from Railway's own network, since local
-// connections to the pooler have proven unreliable all session), so
-// db/pool.ts's rejectUnauthorized:true fix can be re-attempted with the
-// real CA pinned via `ca` instead of guessing. Remove once that's done.
-adminRouter.get("/admin/debug/db-cert", async (req: Request, res: Response) => {
-  if (!requireAdminKey(req, res)) return;
-  const { default: net } = await import("node:net");
-  const { default: tls } = await import("node:tls");
-  const dbUrl = new URL(process.env.DATABASE_URL ?? "");
-  const host = dbUrl.hostname;
-  const port = Number(dbUrl.port || 5432);
-
-  try {
-    const chain = await new Promise<any[]>((resolve, reject) => {
-      const socket = net.connect(port, host, () => {
-        const buf = Buffer.alloc(8);
-        buf.writeInt32BE(8, 0);
-        buf.writeInt32BE(80877103, 4);
-        socket.write(buf);
-      });
-      socket.once("data", (data) => {
-        if (data.toString("utf8", 0, 1) !== "S") {
-          reject(new Error("server declined SSL upgrade"));
-          return;
-        }
-        const tlsSocket = tls.connect({ socket, servername: host, rejectUnauthorized: false }, () => {
-          const out: any[] = [];
-          let c: any = tlsSocket.getPeerCertificate(true);
-          while (c && Object.keys(c).length) {
-            out.push({
-              subject: c.subject,
-              issuer: c.issuer,
-              validFrom: c.valid_from,
-              validTo: c.valid_to,
-              fingerprint256: c.fingerprint256,
-              pem: c.raw ? `-----BEGIN CERTIFICATE-----\n${c.raw.toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END CERTIFICATE-----` : null,
-            });
-            c = c.issuerCertificate && c.issuerCertificate !== c ? c.issuerCertificate : null;
-          }
-          tlsSocket.end();
-          resolve(out);
-        });
-        tlsSocket.on("error", reject);
-      });
-      socket.on("error", reject);
-      setTimeout(() => reject(new Error("timed out")), 10_000);
-    });
-    res.json({ host, port, chain });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
 // Investor/funding-facing numbers — narrower and more curated than
 // /admin/overview's ops-health snapshot: settled volume and captured
 // revenue only, never counting failed/pending attempts as if they were
