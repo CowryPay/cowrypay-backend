@@ -18,10 +18,14 @@ import { sendTelegramOpsAlert } from "./telegram.js";
 // self-healed within one cycle instead of staying invisible until a user
 // reports a missing deposit.
 export async function reconcileSolanaWebhookAddresses(): Promise<void> {
-  if (!env.heliusApiKey || !env.heliusWebhookId) return;
+  if (!env.heliusApiKey || !env.heliusWebhookId) {
+    console.log("[solana-webhook-reconciler] skipped: HELIUS_API_KEY or HELIUS_WEBHOOK_ID not set");
+    return;
+  }
 
   const wallets = await walletsRepo.listByChain("solana");
   const dbAddresses = wallets.map((w) => w.address);
+  console.log(`[solana-webhook-reconciler] found ${dbAddresses.length} solana wallet(s) in DB`);
   if (dbAddresses.length === 0) return;
 
   const base = `https://mainnet.helius-rpc.com/v0/webhooks/${env.heliusWebhookId}`;
@@ -32,6 +36,7 @@ export async function reconcileSolanaWebhookAddresses(): Promise<void> {
   }
   const current = (await getRes.json()) as { webhookURL?: string; accountAddresses?: string[] };
   const currentSet = new Set(current.accountAddresses ?? []);
+  console.log(`[solana-webhook-reconciler] helius currently watches ${currentSet.size} address(es)`);
 
   const missing = dbAddresses.filter((a) => !currentSet.has(a));
   // Also catches the exact webhookURL misconfiguration that caused the
@@ -40,6 +45,9 @@ export async function reconcileSolanaWebhookAddresses(): Promise<void> {
   // never notice without checking.
   const expectedUrl = `${env.publicBaseUrl}/webhooks/solana`;
   const urlMismatch = Boolean(env.publicBaseUrl) && current.webhookURL !== expectedUrl;
+  console.log(
+    `[solana-webhook-reconciler] missing=${missing.length} urlMismatch=${urlMismatch} currentUrl=${current.webhookURL} expectedUrl=${expectedUrl}`,
+  );
 
   if (missing.length === 0 && !urlMismatch) return; // already in sync
 
