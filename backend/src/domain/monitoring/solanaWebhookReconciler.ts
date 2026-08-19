@@ -34,7 +34,13 @@ export async function reconcileSolanaWebhookAddresses(): Promise<void> {
     console.error(`[solana-webhook-reconciler] GET webhook failed (${getRes.status}): ${await getRes.text()}`);
     return;
   }
-  const current = (await getRes.json()) as { webhookURL?: string; accountAddresses?: string[] };
+  const current = (await getRes.json()) as {
+    webhookURL?: string;
+    accountAddresses?: string[];
+    transactionTypes?: string[];
+    webhookType?: string;
+    authHeader?: string;
+  };
   const currentSet = new Set(current.accountAddresses ?? []);
   console.log(`[solana-webhook-reconciler] helius currently watches ${currentSet.size} address(es)`);
 
@@ -51,14 +57,20 @@ export async function reconcileSolanaWebhookAddresses(): Promise<void> {
 
   if (missing.length === 0 && !urlMismatch) return; // already in sync
 
+  // Same fix as registerSolanaWebhookAddress's own comment explains —
+  // Helius's PUT rejects the read-only fields its GET response includes
+  // (webhookID, project, wallet), so only the real, settable fields are
+  // sent here, explicitly, not a spread of the raw GET response.
   const merged = [...currentSet, ...missing];
   const putRes = await fetch(`${base}?api-key=${env.heliusApiKey}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      ...current,
+      webhookURL: urlMismatch ? expectedUrl : current.webhookURL,
+      transactionTypes: current.transactionTypes,
+      webhookType: current.webhookType,
+      authHeader: current.authHeader,
       accountAddresses: merged,
-      ...(urlMismatch ? { webhookURL: expectedUrl } : {}),
     }),
   });
   if (!putRes.ok) {

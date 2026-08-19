@@ -180,14 +180,34 @@ async function registerSolanaWebhookAddress(address: string): Promise<void> {
     const base = `https://mainnet.helius-rpc.com/v0/webhooks/${env.heliusWebhookId}`;
     const getRes = await fetch(`${base}?api-key=${env.heliusApiKey}`);
     if (!getRes.ok) throw new Error(`GET webhook failed (${getRes.status}): ${await getRes.text()}`);
-    const current = (await getRes.json()) as { accountAddresses?: string[] };
+    const current = (await getRes.json()) as {
+      webhookURL?: string;
+      accountAddresses?: string[];
+      transactionTypes?: string[];
+      webhookType?: string;
+      authHeader?: string;
+    };
     const addresses = current.accountAddresses ?? [];
     if (addresses.includes(address)) return; // already watched, nothing to do
 
+    // Real incident this closes: Helius's GET response includes read-only
+    // metadata fields (webhookID, project, wallet) that its PUT endpoint
+    // rejects outright if echoed back — spreading the full GET response
+    // into the PUT body (the original version of this function did
+    // exactly that) meant EVERY call here failed with a 400, silently,
+    // since the feature was added. 26 of 27 production Solana wallets
+    // never actually got registered. Only send the fields PUT actually
+    // accepts, explicitly, not a spread of whatever GET happened to return.
     const putRes = await fetch(`${base}?api-key=${env.heliusApiKey}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...current, accountAddresses: [...addresses, address] }),
+      body: JSON.stringify({
+        webhookURL: current.webhookURL,
+        transactionTypes: current.transactionTypes,
+        webhookType: current.webhookType,
+        authHeader: current.authHeader,
+        accountAddresses: [...addresses, address],
+      }),
     });
     if (!putRes.ok) throw new Error(`PUT webhook failed (${putRes.status}): ${await putRes.text()}`);
   } catch (err) {
