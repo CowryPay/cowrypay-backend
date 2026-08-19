@@ -104,9 +104,27 @@ export async function ingestDeposit(input: {
   return { deposit: existing, alreadyProcessed: true };
 }
 
+// Real incident this closes: ingestDeposit's own fallback path can call
+// this twice for the same deposit if two calls race close enough together
+// (a scanner cycle overrunning its 30s interval — the exact same shape of
+// race already found and fixed in the withdrawal confirmation pollers —
+// or a redelivered webhook). The CAS claim below is what actually makes
+// that safe, not the caller's own state check (which is a plain read, not
+// atomic with the call that follows it): only one concurrent invocation
+// can ever win the DEPOSIT_DETECTED -> DEPOSIT_COMPLIANCE_SCREENING
+// transition, so only one can ever reach the credit at the end. The loser
+// backs off and reports whatever the winner's outcome actually was,
+// instead of independently re-running screening and crediting the ledger
+// a second time.
 async function runScreening(depositId: string): Promise<Deposit> {
-  const deposit = await withTransaction(async (client) => {
-    let deposit = await depositsRepo.updateState(client, depositId, "DEPOSIT_COMPLIANCE_SCREENING");
+  const claimed = await withTransaction(async (client) => {
+    const deposit = await depositsRepo.updateStateIfCurrent(
+      client,
+      depositId,
+      "DEPOSIT_DETECTED",
+      "DEPOSIT_COMPLIANCE_SCREENING",
+    );
+    if (!deposit) return null;
     await depositsRepo.logTransition(
       client,
       depositId,
@@ -114,11 +132,23 @@ async function runScreening(depositId: string): Promise<Deposit> {
       "DEPOSIT_COMPLIANCE_SCREENING",
       "screening_started",
     );
+    return deposit;
+  });
 
-    const result = await screenDeposit(deposit.amount);
+  if (!claimed) {
+    // Lost the race — another call already claimed this deposit for
+    // screening (or it's already past that point). Report the current
+    // real state instead of duplicating that work.
+    const current = await depositsRepo.findById(depositId);
+    if (!current) throw new Error(`Deposit ${depositId} vanished mid-screening`);
+    return current;
+  }
+
+  const deposit = await withTransaction(async (client) => {
+    const result = await screenDeposit(claimed.amount);
 
     if (!result.clear) {
-      deposit = await depositsRepo.updateState(client, depositId, "MANUAL_REVIEW");
+      const next = await depositsRepo.updateState(client, depositId, "MANUAL_REVIEW");
       await depositsRepo.logTransition(
         client,
         depositId,
@@ -126,10 +156,10 @@ async function runScreening(depositId: string): Promise<Deposit> {
         "MANUAL_REVIEW",
         result.reason ?? "screening_flagged",
       );
-      return deposit;
+      return next;
     }
 
-    deposit = await depositsRepo.updateState(client, depositId, "BALANCE_CREDITED");
+    const next = await depositsRepo.updateState(client, depositId, "BALANCE_CREDITED");
     await depositsRepo.logTransition(
       client,
       depositId,
@@ -137,8 +167,8 @@ async function runScreening(depositId: string): Promise<Deposit> {
       "BALANCE_CREDITED",
       "screening_clear",
     );
-    await ledgerRepo.creditAvailable(client, deposit.userId, deposit.tokenSymbol, deposit.chain, deposit.amount);
-    return deposit;
+    await ledgerRepo.creditAvailable(client, next.userId, next.tokenSymbol, next.chain, next.amount);
+    return next;
   });
 
   if (deposit.state === "BALANCE_CREDITED") await triggerSweepAfterCredit(deposit);

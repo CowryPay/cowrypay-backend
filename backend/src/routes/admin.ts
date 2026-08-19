@@ -223,6 +223,16 @@ adminRouter.get("/admin/deposits/by-hash", async (req: Request, res: Response) =
   res.json({ deposit, transitions, userBalances, userDeposits });
 });
 
+// One-time audit for the double-credit race just fixed in
+// stateMachine.ts's runScreening — finds every deposit (any chain) whose
+// ledger credit ran more than once, so each can be reconciled by hand
+// instead of assuming the one live-reported case was the only one.
+adminRouter.get("/admin/deposits/audit-double-credits", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const affected = await adminRepo.findDoubleCreditedDeposits();
+  res.json({ affected });
+});
+
 // Deliberately a pure audit correction, NOT applyTerminalFailureTransition
 // (sendStateTransition.ts) — that helper always credits the send's user
 // back, which is the right call when OUR system is the one that failed a

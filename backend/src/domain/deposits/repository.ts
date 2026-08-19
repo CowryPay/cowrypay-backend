@@ -88,6 +88,30 @@ export const depositsRepo = {
     return mapDeposit(rows[0]);
   },
 
+  // CAS guard — closes a real double-credit bug: ingestDeposit's own
+  // fallback path (re-triggering screening when a concurrent call's
+  // insertIfNew conflicts but the row is still DEPOSIT_DETECTED) can run
+  // TWICE for the same deposit if two calls race close enough together
+  // (e.g. a scanner cycle overrunning its interval, or a redelivered
+  // webhook) — both see DEPOSIT_DETECTED, both ran the full screening ->
+  // credit sequence independently, since updateState above has no guard
+  // against that. Confirmed live: a real $1 Stellar deposit was credited
+  // twice this way. Only the update whose expectedCurrentState still
+  // matches wins; the loser gets null back and backs off instead of
+  // duplicating the credit.
+  async updateStateIfCurrent(
+    client: PoolClient,
+    id: string,
+    expectedCurrentState: DepositState,
+    nextState: DepositState,
+  ): Promise<Deposit | null> {
+    const { rows } = await client.query(
+      `update deposits set state = $2, updated_at = now() where id = $1 and state = $3 returning *`,
+      [id, nextState, expectedCurrentState],
+    );
+    return rows[0] ? mapDeposit(rows[0]) : null;
+  },
+
   async logTransition(
     client: PoolClient,
     depositId: string,

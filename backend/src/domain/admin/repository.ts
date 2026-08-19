@@ -470,4 +470,36 @@ export const adminRepo = {
       providerOrderId: r.provider_order_id,
     }));
   },
+
+  // Finds every deposit that ever actually went through the
+  // DEPOSIT_COMPLIANCE_SCREENING -> BALANCE_CREDITED transition more than
+  // once — the definitive signature of the double-credit race just fixed
+  // in stateMachine.ts's runScreening (a concurrent re-run of ingestDeposit
+  // for the same deposit, crediting the ledger twice for one real
+  // transaction). One-time audit surface to check whether any OTHER
+  // deposit was hit by this before the fix, not just the one reported live.
+  async findDoubleCreditedDeposits(): Promise<
+    Array<{ depositId: string; creditCount: number; chain: string; txHash: string; userId: string; amount: string }>
+  > {
+    const { rows } = await pool.query(`
+      select d.id as deposit_id, t.credit_count, d.chain, d.tx_hash, d.user_id, d.amount
+      from deposits d
+      join (
+        select deposit_id, count(*) as credit_count
+        from deposit_state_transitions
+        where to_state = 'BALANCE_CREDITED'
+        group by deposit_id
+        having count(*) > 1
+      ) t on t.deposit_id = d.id
+      order by d.created_at desc
+    `);
+    return rows.map((r) => ({
+      depositId: r.deposit_id,
+      creditCount: Number(r.credit_count),
+      chain: r.chain,
+      txHash: r.tx_hash,
+      userId: r.user_id,
+      amount: r.amount,
+    }));
+  },
 };
