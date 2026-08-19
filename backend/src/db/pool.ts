@@ -9,13 +9,16 @@ setDefaultResultOrder("ipv4first");
 
 export const pool = new Pool({
   connectionString: env.databaseUrl,
-  // rejectUnauthorized: false previously left every query MITM-able by
-  // anyone positioned on the network path (DNS hijack, ARP spoof in a
-  // shared VPC, compromised proxy) — the connection was encrypted but the
-  // server's certificate was never actually validated. Supabase's pooler
-  // uses a publicly-trusted certificate chain (not self-signed), so the
-  // default Node root store is enough here — no custom CA needed.
-  ssl: env.databaseSsl ? { rejectUnauthorized: true } : undefined,
+  // rejectUnauthorized: false leaves every query MITM-able in principle by
+  // anyone positioned on the network path — tried flipping this to true
+  // and confirmed LIVE that this project's Supabase pooler presents a
+  // certificate Node's default root store doesn't trust
+  // (SELF_SIGNED_CERT_IN_CHAIN, reproduced across every DB-backed route
+  // and poller within seconds of deploying that change) — reverted
+  // immediately. The real fix needs Supabase's actual CA bundle supplied
+  // explicitly via `ca`, not just flipping this flag; tracked separately,
+  // not attempted again without it in hand.
+  ssl: env.databaseSsl ? { rejectUnauthorized: false } : undefined,
   // Without these, a flaky network path to the DB hangs a request forever
   // instead of failing with a clear error — connectionTimeoutMillis bounds
   // how long to wait for a new connection, statement_timeout bounds how
