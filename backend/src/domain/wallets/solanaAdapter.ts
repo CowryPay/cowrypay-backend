@@ -79,6 +79,24 @@ function rpcClient() {
   return createSolanaRpc(env.solanaRpcUrl);
 }
 
+// Exported for crossChainSend/service.ts's just-in-time sweep backstop — the
+// Solana-source analog of readTokenBalance (depositSweeper.ts) checking the
+// EVM payout wallet before a bridge call, since the treasury's own ATA is
+// what a Solana-source cross-chain send actually spends from (see
+// solanaDepositSweeper.ts's withdraw()/sweepWallet, both treasury-funded).
+// Returns 0n rather than throwing when the ATA doesn't exist yet (e.g. a
+// mint the treasury has never received), matching sweepWallet's own
+// getTokenAccountBalance().catch(() => null) treatment of the same case.
+export async function readSolanaTreasuryBalance(tokenSymbol: string): Promise<bigint> {
+  const rpc = rpcClient();
+  const treasury = await getSolanaTreasurySigner();
+  const treasuryOwner = toAddress(treasury.address);
+  const mint = toAddress(getSolanaMint(tokenSymbol));
+  const [treasuryAta] = await findAssociatedTokenPda({ owner: treasuryOwner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+  const balanceResult = await rpc.getTokenAccountBalance(treasuryAta).send().catch(() => null);
+  return balanceResult ? BigInt(balanceResult.value.amount) : 0n;
+}
+
 const CONFIRM_POLL_INTERVAL_MS = 2_000;
 const CONFIRM_REBROADCAST_INTERVAL_MS = 5_000;
 

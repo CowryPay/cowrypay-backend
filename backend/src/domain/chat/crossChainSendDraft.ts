@@ -1,0 +1,182 @@
+import { walletsRepo } from "../wallets/repository.js";
+import { ledgerRepo } from "../ledger/repository.js";
+import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
+import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
+import { computeCryptoWithdrawalFeeSplit } from "../offramp/fee.js";
+import { getTokenConfig } from "../wallets/chains.js";
+import { getBridgeAdapter } from "../crossChainSend/bridge/index.js";
+import { env } from "../../config/env.js";
+import { formatAmount } from "../../utils/format.js";
+import type { ParsedIntent } from "./schemas.js";
+
+// The 4 chains that ever participate in a working cross-chain-send pair
+// today (see crossChainSend/bridge/cctpAdapter.ts and liFiAdapter.ts) —
+// Stellar isn't included since no viable native-USDC path has been found
+// for it yet through any bridge checked.
+const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "optimism", "solana"];
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export interface CrossChainSendDraft {
+  amount: string;
+  toAddress: string;
+  sourceChain: string;
+  destinationChain: string;
+  tokenSymbol: string;
+}
+
+export type CrossChainSendIntent = Extract<ParsedIntent, { kind: "crossChainSend" }>;
+
+export type CrossChainSendResolution =
+  | { ok: true; draft: CrossChainSendDraft; summary: string }
+  | { ok: false; message: string };
+
+// Mirrors cryptoWithdrawalDraft.ts's mergeCryptoWithdrawalDrafts — new
+// non-empty values win, missing ones fall back to what's already known
+// from an earlier message in the same multi-turn exchange.
+export function mergeCrossChainSendDrafts(
+  existing: CrossChainSendIntent,
+  incoming: CrossChainSendIntent,
+): CrossChainSendIntent {
+  return {
+    kind: "crossChainSend",
+    action: "SEND_CROSS_CHAIN",
+    amount: incoming.amount ?? existing.amount,
+    toAddress: incoming.toAddress ?? existing.toAddress,
+    sourceChainHint: incoming.sourceChainHint ?? existing.sourceChainHint,
+    destinationChainHint: incoming.destinationChainHint ?? existing.destinationChainHint,
+    tokenHint: incoming.tokenHint ?? existing.tokenHint,
+  };
+}
+
+// The one thing this must never do is trust a parsed address as final —
+// same §9 boundary as cryptoWithdrawalDraft.ts (see its own comment on
+// why). This only ever produces a DRAFT: the frontend shows it back to
+// the user in full (both chains, the exact address, the fee, the
+// estimate) for explicit review before they enter their PIN and the app
+// calls the real, unchanged POST /cross-chain-sends endpoint directly —
+// chat never calls it.
+export async function resolveCrossChainSendIntent(
+  userId: string,
+  intent: CrossChainSendIntent,
+): Promise<CrossChainSendResolution> {
+  if (intent.amount == null || intent.amount <= 0) {
+    return { ok: false, message: "How much USDC would you like to send?" };
+  }
+  if (!intent.toAddress) {
+    return { ok: false, message: "What's the destination wallet address?" };
+  }
+
+  const sourceChain = intent.sourceChainHint?.toLowerCase();
+  const destinationChain = intent.destinationChainHint?.toLowerCase();
+
+  if (sourceChain && !ALL_CROSS_CHAIN_SEND_CHAINS.includes(sourceChain)) {
+    return {
+      ok: false,
+      message: `"${intent.sourceChainHint}" isn't a chain cross-chain send supports yet. Which one: ${ALL_CROSS_CHAIN_SEND_CHAINS.map(capitalize).join(", ")}?`,
+    };
+  }
+  if (destinationChain && !ALL_CROSS_CHAIN_SEND_CHAINS.includes(destinationChain)) {
+    return {
+      ok: false,
+      message: `"${intent.destinationChainHint}" isn't a chain cross-chain send supports yet. Which one: ${ALL_CROSS_CHAIN_SEND_CHAINS.map(capitalize).join(", ")}?`,
+    };
+  }
+  if (!sourceChain) {
+    return { ok: false, message: "Which chain do you currently have the funds on?" };
+  }
+  if (!destinationChain) {
+    return { ok: false, message: "Which chain would you like it sent to?" };
+  }
+  if (sourceChain === destinationChain) {
+    return {
+      ok: false,
+      message: `Those are the same chain — for a regular withdrawal that stays on ${capitalize(sourceChain)}, just say "withdraw" instead of "send cross-chain".`,
+    };
+  }
+
+  // Checked before anything else chain-specific — a pair the bridge layer
+  // doesn't support yet should fail clean here, not partway through
+  // balance/fee checks. See crossChainSend/bridge/index.ts's own
+  // dispatch — Celo routes through liFiAdapter.ts, everything else
+  // through cctpAdapter.ts.
+  const bridge = getBridgeAdapter(sourceChain, destinationChain);
+  if (!bridge.supports(sourceChain, destinationChain)) {
+    return {
+      ok: false,
+      message: `Sending from ${capitalize(sourceChain)} to ${capitalize(destinationChain)} isn't supported yet.`,
+    };
+  }
+
+  if (!isValidAddressForChain(destinationChain, intent.toAddress)) {
+    return {
+      ok: false,
+      message: `"${intent.toAddress}" doesn't look like a valid ${capitalize(destinationChain)} address — double-check it and send it again.`,
+    };
+  }
+
+  // Omitted means USDC, the only token that existed before USDT support.
+  const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
+  if (["celo", "base", "optimism"].includes(sourceChain)) {
+    try {
+      getTokenConfig(sourceChain, tokenSymbol);
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKeyFor(sourceChain));
+  if (!wallet) {
+    return { ok: false, message: `You don't have a wallet on ${capitalize(sourceChain)} yet.` };
+  }
+
+  const amountStr = intent.amount.toString();
+  const balances = await ledgerRepo.getBalancesForUser(userId);
+  const balance = balances.find((b) => b.chain === sourceChain && b.tokenSymbol === tokenSymbol);
+  if (!balance || Number(balance.availableBalance) < intent.amount) {
+    // Postgres numeric columns come back full-precision — trimmed for a
+    // user-facing message the same way every other balance display in
+    // this codebase already does (see formatAmount's own comment).
+    const available = formatAmount(balance?.availableBalance ?? "0");
+    return {
+      ok: false,
+      message: `You only have ${available} ${tokenSymbol} available on ${capitalize(sourceChain)} — that's less than the ${amountStr} you asked to send.`,
+    };
+  }
+
+  // Same split the real POST /cross-chain-sends endpoint computes — no
+  // cross-chain premium (product decision), shown here up front so it's
+  // not a surprise at PIN-entry time. A null split means the amount can't
+  // even cover the minimum fee.
+  const split = computeCryptoWithdrawalFeeSplit(amountStr);
+  if (!split) {
+    return {
+      ok: false,
+      message: `${amountStr} ${tokenSymbol} is too small to send cross-chain — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${tokenSymbol} fee. Try a larger amount.`,
+    };
+  }
+
+  // A quote failure here (RPC hiccup, route temporarily unavailable) is
+  // shown as a retryable message, not a hard error — nothing's been
+  // touched yet (no debit, no draft saved as final).
+  let quote;
+  try {
+    quote = await bridge.quote({ sourceChain, destinationChain, tokenSymbol, amount: split.netAmount });
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Couldn't get a quote for that route right now (${err instanceof Error ? err.message : String(err)}) — try again in a moment.`,
+    };
+  }
+
+  const draft: CrossChainSendDraft = { amount: amountStr, toAddress: intent.toAddress, sourceChain, destinationChain, tokenSymbol };
+  const etaMinutes = Math.max(1, Math.round(quote.estimatedSeconds / 60));
+
+  return {
+    ok: true,
+    draft,
+    summary: `Ready to send ${amountStr} ${tokenSymbol} from ${capitalize(sourceChain)} to ${intent.toAddress} on ${capitalize(destinationChain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive approximately ${quote.destinationAmount} ${tokenSymbol} (the exact amount can vary slightly on this route). Estimated time: ~${etaMinutes} minute${etaMinutes === 1 ? "" : "s"}. Double-check that address and chain carefully — crypto sent cross-chain to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
+  };
+}

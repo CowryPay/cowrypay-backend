@@ -212,4 +212,9 @@ export const env = {
   // 0.05 SOL is roughly 16 signups' worth of runway, the same real incident
   // this whole monitor was built in response to.
   solanaSolAlertThreshold: process.env.SOLANA_SOL_ALERT_THRESHOLD ?? "0.05",
+  // Selects Circle's attestation API base URL (crossChainSend/bridge/
+  // cctpAttestation.ts) — every EVM RPC URL above defaults to mainnet
+  // (unlike Stellar/Solana, which default to testnet), so this matches
+  // that default rather than introducing a third convention.
+  cctpEnvironment: process.env.CCTP_ENVIRONMENT ?? "mainnet",
 };

@@ -21,6 +21,7 @@ import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
 import { cryptoWithdrawalsRouter } from "./routes/cryptoWithdrawals.js";
+import { crossChainSendsRouter } from "./routes/crossChainSends.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 import { startPaycrestSettlementPoller } from "./domain/offramp/paycrestSettlementPoller.js";
 import { startQuidaxSettlementPoller } from "./domain/offramp/quidaxSettlementPoller.js";
@@ -34,6 +35,7 @@ import { startSolanaAtaReclaimer } from "./domain/wallets/solanaAtaReclaimer.js"
 import { startGasStatusMonitor } from "./domain/monitoring/gasStatusMonitor.js";
 import { startDoubleCreditMonitor } from "./domain/monitoring/doubleCreditMonitor.js";
 import { startSolanaWebhookReconciler } from "./domain/monitoring/solanaWebhookReconciler.js";
+import { startCrossChainSendConfirmationPoller } from "./domain/crossChainSend/crossChainSendConfirmationPoller.js";
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -56,6 +58,7 @@ app.use(solanaWalletRouter);
 app.use(solanaWebhookRouter);
 app.use(adminRouter);
 app.use(cryptoWithdrawalsRouter);
+app.use(crossChainSendsRouter);
 
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
@@ -74,3 +77,4 @@ startSolanaAtaReclaimer();
 startGasStatusMonitor();
 startDoubleCreditMonitor();
 startSolanaWebhookReconciler();
+startCrossChainSendConfirmationPoller();

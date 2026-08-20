@@ -14,6 +14,7 @@ import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnosti
 import { ledgerRepo } from "../domain/ledger/repository.js";
 import { depositsRepo } from "../domain/deposits/repository.js";
 import { reconcileSolanaWebhookAddresses } from "../domain/monitoring/solanaWebhookReconciler.js";
+import { crossChainSendsRepo } from "../domain/crossChainSend/repository.js";
 
 export const adminRouter = Router();
 
@@ -565,6 +566,56 @@ adminRouter.post("/admin/deposits/ingest", async (req: Request, res: Response) =
   try {
     const result = await ingestDeposit({ userId, walletId: wallet.id, tokenSymbol, amount, chain, txHash });
     res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+const ManualCrossChainRefundSchema = z.object({
+  note: z.string().min(1),
+  actor: z.string().min(1),
+});
+
+// The deliberate, audited exception to "a confirmed source-chain burn is
+// never auto-refunded" (see crossChainSendConfirmationPoller.ts's own
+// comment) — only for a STUCK send an admin has independently determined
+// is genuinely unrecoverable (e.g. the bridge vendor's contract is
+// permanently paused), never a routine retry path. `actor` is required
+// and gets logged as-is in cross_chain_send_state_transitions (not
+// "system"), so this is always traceable to a specific human decision.
+adminRouter.post("/admin/cross-chain-sends/:id/manual-refund", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = ManualCrossChainRefundSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const send = await crossChainSendsRepo.findById(req.params.id);
+  if (!send) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (send.state !== "STUCK") {
+    res.status(400).json({ error: `send is ${send.state}, not STUCK — manual refund only applies to a stuck send` });
+    return;
+  }
+
+  try {
+    await withTransaction(async (client) => {
+      const updated = await crossChainSendsRepo.updateStateIfCurrent(client, send.id, "STUCK", { state: "REFUNDED" });
+      if (!updated) throw new Error("send is no longer STUCK — it may have completed or been resolved already");
+      await ledgerRepo.creditAvailable(client, send.userId, send.tokenSymbol, send.sourceChain, send.amountHuman);
+      await crossChainSendsRepo.logTransition(
+        client,
+        send.id,
+        "STUCK",
+        "REFUNDED",
+        `manual_refund: ${parsed.data.note}`,
+        parsed.data.actor,
+      );
+    });
+    res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

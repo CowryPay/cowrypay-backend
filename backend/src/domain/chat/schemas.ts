@@ -1,9 +1,11 @@
 import { z } from "zod";
 
-// Scoped to what CowryPay actually does — off-ramp send via Paycrest plus
-// read-only account info. No @username transfers, on-chain approvals, or
-// cross-chain bridging — those belonged to the old on-chain P2P product
-// this backend replaced.
+// Scoped to what CowryPay actually does — off-ramp send via Paycrest,
+// same-chain crypto withdrawal, cross-chain send, plus read-only account
+// info. No @username transfers or on-chain approvals — those belonged to
+// the old on-chain P2P product this backend replaced. Cross-chain
+// bridging, unlike that old product's version, is a deliberate feature
+// here (domain/crossChainSend/), not something excluded.
 export const parsedIntentSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("remittance"),
@@ -42,6 +44,26 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     chainHint: z.string().optional(),
     // Which token to withdraw, if the user named one (e.g. "withdraw 20
     // USDT") — omitted means USDC, same as remittance's tokenHint.
+    tokenHint: z.string().optional(),
+  }),
+  // Same §9 boundary as cryptoWithdrawal above — a parsed toAddress here
+  // is only ever a draft the user must see and explicitly confirm before
+  // the real, PIN-gated POST /cross-chain-sends endpoint is called; chat
+  // never calls it directly. See domain/chat/crossChainSendDraft.ts.
+  // Distinct from cryptoWithdrawal specifically because the destination
+  // is a DIFFERENT chain than the source (a same-chain "withdraw to
+  // wallet" is cryptoWithdrawal; two distinct chains named is this).
+  z.object({
+    kind: z.literal("crossChainSend"),
+    action: z.literal("SEND_CROSS_CHAIN"),
+    amount: z.number().optional(),
+    toAddress: z.string().optional(),
+    // Which chain the user's funds currently sit on.
+    sourceChainHint: z.string().optional(),
+    // Which chain the funds should end up on — the whole point of this
+    // intent kind versus cryptoWithdrawal is that this differs from
+    // sourceChainHint.
+    destinationChainHint: z.string().optional(),
     tokenHint: z.string().optional(),
   }),
   z.object({

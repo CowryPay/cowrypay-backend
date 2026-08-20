@@ -153,3 +153,58 @@ export interface CryptoWithdrawalStateTransition {
   actor: string;
   createdAt: string;
 }
+
+// Cross-chain send: source chain's ledger is debited, a real bridge (CCTP
+// today) moves the value, the destination chain pays out — see
+// domain/crossChainSend/. STUCK is the one state with no analog in
+// CryptoWithdrawalState: it means the source-chain burn/lock already
+// happened (real, final, on-chain) but the destination leg hasn't
+// completed — deliberately excluded from every ledger-credit code path
+// (see crossChainSend/service.ts's own risk-handling comment) since a
+// confirmed burn can't be silently un-burned the way a same-chain
+// broadcast failure can just be refunded.
+export type CrossChainSendState =
+  | "PENDING"
+  | "SOURCE_BROADCAST"
+  | "SOURCE_CONFIRMED"
+  | "BRIDGING"
+  | "DESTINATION_BROADCAST"
+  | "COMPLETE"
+  | "FAILED"
+  | "STUCK"
+  | "REFUNDED";
+
+export interface CrossChainSend {
+  id: string;
+  userId: string;
+  walletId: string;
+  tokenSymbol: string;
+  sourceChain: string;
+  destinationChain: string;
+  amountHuman: string;
+  feeAmount: string;
+  netAmount: string;
+  toAddress: string;
+  treasuryAddress: string;
+  bridgeVendor: string;
+  provider: string;
+  reference: string;
+  sourceTxHash: string | null;
+  destinationTxHash: string | null;
+  bridgeReference: Record<string, unknown> | null;
+  sourceConfirmedAt: string | null;
+  destinationConfirmedAt: string | null;
+  state: CrossChainSendState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrossChainSendStateTransition {
+  id: string;
+  crossChainSendId: string;
+  fromState: CrossChainSendState | null;
+  toState: CrossChainSendState;
+  trigger: string;
+  actor: string;
+  createdAt: string;
+}

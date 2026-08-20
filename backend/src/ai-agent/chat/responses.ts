@@ -177,6 +177,7 @@ export function buildHelpMessage(): string {
     `• "Which chains are supported?" — see what network your deposit address runs on`,
     `• "Send $50 to a bank account in Nigeria" — send money abroad; tell me the amount, provider, and account`,
     `• "Withdraw 20 USDC to 0x... on Base" — send crypto to an external wallet address`,
+    `• "I have 10 USDC on Celo but need it on Base" — move funds from one chain to a different one`,
     `• "My transactions" — see your recent activity`,
     "",
     `Need a real person? Reach us on Telegram: https://t.me/+OV3fAjsqmrtlZmY8`,

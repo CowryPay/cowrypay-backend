@@ -25,6 +25,12 @@ import {
   type CryptoWithdrawalDraft,
   type CryptoWithdrawalIntent,
 } from "./cryptoWithdrawalDraft.js";
+import {
+  mergeCrossChainSendDrafts,
+  resolveCrossChainSendIntent,
+  type CrossChainSendDraft,
+  type CrossChainSendIntent,
+} from "./crossChainSendDraft.js";
 import { clearSession, getActiveSession, saveSession, touchSession, type ChatDraftIntent } from "./sessionRepository.js";
 
 function capitalize(s: string): string {
@@ -49,6 +55,11 @@ export interface ChatResult {
   // (see cryptoWithdrawalDraft.ts's own comment on why) before collecting
   // the PIN and submitting to POST /crypto-withdrawals itself.
   pendingCryptoWithdrawal?: CryptoWithdrawalDraft;
+  // Same §9 boundary, third money-moving flow (API-only so far — see
+  // crossChainSendDraft.ts's own comment) — the frontend must show both
+  // chains and the exact address back to the user before collecting the
+  // PIN and submitting to POST /cross-chain-sends itself.
+  pendingCrossChainSend?: CrossChainSendDraft;
 }
 
 // Gives the LLM the fields already captured from earlier messages, so a bare
@@ -71,6 +82,16 @@ function buildCryptoWithdrawalFollowUpPrompt(draft: CryptoWithdrawalIntent, mess
   if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
   const knownStr = known.length ? `Already known about this pending wallet withdrawal: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this withdrawal request: "${message}"`;
+}
+
+function buildCrossChainSendFollowUpPrompt(draft: CrossChainSendIntent, message: string): string {
+  const known: string[] = [];
+  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.toAddress) known.push(`destination address: ${draft.toAddress}`);
+  if (draft.sourceChainHint) known.push(`source chain: ${draft.sourceChainHint}`);
+  if (draft.destinationChainHint) known.push(`destination chain: ${draft.destinationChainHint}`);
+  const knownStr = known.length ? `Already known about this pending cross-chain send: ${known.join(", ")}. ` : "";
+  return `${knownStr}The user's new message, possibly continuing this cross-chain send request: "${message}"`;
 }
 
 export async function handleChatMessage(userId: string, message: string): Promise<ChatResult> {
@@ -176,13 +197,15 @@ export async function handleChatMessage(userId: string, message: string): Promis
   // sessions come back null (see sessionRepository.ts's idle-timeout check).
   // Which follow-up prompt applies depends on which KIND of draft is
   // active — a bare "20 USDC" means something different mid-remittance
-  // (an amount to send) vs. mid-withdrawal (an amount to withdraw), so
-  // the wrong builder would misdirect the LLM.
+  // (an amount to send) vs. mid-withdrawal (an amount to withdraw) vs.
+  // mid-cross-chain-send, so the wrong builder would misdirect the LLM.
   const llmInput = !activeDraft
     ? message
     : activeDraft.kind === "remittance"
       ? buildFollowUpPrompt(activeDraft, message)
-      : buildCryptoWithdrawalFollowUpPrompt(activeDraft, message);
+      : activeDraft.kind === "cryptoWithdrawal"
+        ? buildCryptoWithdrawalFollowUpPrompt(activeDraft, message)
+        : buildCrossChainSendFollowUpPrompt(activeDraft, message);
   // Real incident this closes: GROQ_MODEL pointed at a model Groq had
   // fully decommissioned, and this catch swallowed every resulting
   // failure silently — chat kept working (degrading to the free-form
@@ -211,6 +234,17 @@ export async function handleChatMessage(userId: string, message: string): Promis
     if (resolution.ok) {
       await clearSession(userId);
       return { reply: resolution.summary, pendingCryptoWithdrawal: resolution.draft };
+    }
+    await saveSession(userId, merged);
+    return { reply: resolution.message };
+  }
+
+  if (parsed?.kind === "crossChainSend") {
+    const merged = activeDraft?.kind === "crossChainSend" ? mergeCrossChainSendDrafts(activeDraft, parsed) : parsed;
+    const resolution = await resolveCrossChainSendIntent(userId, merged);
+    if (resolution.ok) {
+      await clearSession(userId);
+      return { reply: resolution.summary, pendingCrossChainSend: resolution.draft };
     }
     await saveSession(userId, merged);
     return { reply: resolution.message };
