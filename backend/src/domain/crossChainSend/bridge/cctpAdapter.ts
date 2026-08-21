@@ -2,16 +2,22 @@ import { getChainDefinition } from "./chainDefinitions.js";
 import { initiateCctpBurn, checkCctpStatus } from "./cctpBridge.js";
 import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult, BridgeQuote } from "./adapter.js";
 
-// cctpBridge.ts actually signs for base, optimism, and now solana (built
-// on Circle's official SDK — see that file's own comment: adapter-viem-v2
-// for the EVM chains, adapter-solana-kit for Solana). Stellar is a real
-// CCTP domain too but has no official Circle adapter yet, so it isn't
-// registered in chainDefinitions.ts at all. Kept as its own set here
-// (not just "whatever chainDefinitions.ts happens to have"), separate
-// from data availability, so adding a chain definition there in the
-// future (e.g. once Stellar gets an official adapter) doesn't silently
-// enable a route before its signing path actually exists.
-const SUPPORTED_CHAINS = new Set(["base", "optimism", "solana"]);
+// cctpBridge.ts's signing path is actually wired up for base, optimism,
+// and solana (built on Circle's official SDK — see that file's own
+// comment: adapter-viem-v2 for the EVM chains, adapter-solana-kit for
+// Solana). Optimism is deliberately withheld from SUPPORTED_CHAINS below
+// even though it's signing-capable — deposits on Optimism are on hold
+// (see DEPOSIT_CHAINS in ai-agent/chat/intent.ts), so there's currently
+// no way for a user to actually hold an Optimism balance to send from,
+// and offering it as a destination would be inconsistent with that hold.
+// Re-enabling is a one-line change once Optimism deposits ship. Stellar
+// is a real CCTP domain too but has no official Circle adapter yet, so
+// it isn't registered in chainDefinitions.ts at all. Kept as its own set
+// here (not just "whatever chainDefinitions.ts happens to have"),
+// separate from data availability, so adding a chain definition there in
+// the future doesn't silently enable a route before its signing path
+// actually exists.
+const SUPPORTED_CHAINS = new Set(["base", "solana"]);
 
 export const cctpAdapter: BridgeAdapter = {
   // Checks both "does Circle's SDK have a chain definition for this" AND

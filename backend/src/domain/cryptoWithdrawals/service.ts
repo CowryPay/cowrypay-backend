@@ -68,6 +68,15 @@ export async function initiateCryptoWithdrawal(
     throw new Error("Incorrect PIN");
   }
 
+  // Checked against the gross amount, before any fee split — see
+  // env.ts's own comment on why this is separate from
+  // computeCryptoWithdrawalFeeSplit's min-fee check below.
+  if (Number(input.amount) < Number(env.cryptoWithdrawalMinAmountUsd)) {
+    throw new Error(
+      `${input.amount} is below the ${env.cryptoWithdrawalMinAmountUsd} ${env.defaultTokenSymbol} minimum for a withdrawal.`,
+    );
+  }
+
   // A wrong-format destination here is unrecoverable money loss, not a
   // retryable error — validated before any balance is touched.
   if (!isValidAddressForChain(input.chain, input.toAddress)) {

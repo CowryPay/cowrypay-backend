@@ -11,7 +11,7 @@ import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
 import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
-import { computeCryptoWithdrawalFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
+import { computeCrossChainSendFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
@@ -59,6 +59,17 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
     throw new Error("Source and destination chain are the same — use a regular crypto withdrawal instead.");
   }
 
+  // Checked against the gross amount, before any fee split — see
+  // env.ts's own comment on why this is a separate, higher floor than
+  // computeCrossChainSendFeeSplit's min-fee check below (that one only
+  // guards the platform's fee revenue, not the bridge's own economics —
+  // this one guards the bridge itself being worth using at all).
+  if (Number(input.amount) < Number(env.crossChainSendMinAmountUsd)) {
+    throw new Error(
+      `${input.amount} is below the ${env.crossChainSendMinAmountUsd} ${env.defaultTokenSymbol} minimum for a cross-chain send.`,
+    );
+  }
+
   // A wrong-format destination here is unrecoverable money loss, same
   // reasoning as isValidAddressForChain's own doc comment.
   if (!isValidAddressForChain(input.destinationChain, input.toAddress)) {
@@ -74,7 +85,7 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   }
 
   const tokenSymbol = input.tokenSymbol ?? env.defaultTokenSymbol;
-  if (["celo", "base", "optimism"].includes(input.sourceChain.toLowerCase())) {
+  if (["celo", "base"].includes(input.sourceChain.toLowerCase())) {
     getTokenConfig(input.sourceChain, tokenSymbol);
   }
 
@@ -82,14 +93,15 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
 
-  // Same fee as a same-chain crypto withdrawal — no cross-chain premium
-  // (product decision). Computed before touching the ledger; a null
-  // split (amount too small to cover the minimum fee) must fail before
-  // any balance is debited.
-  const split = computeCryptoWithdrawalFeeSplit(input.amount);
+  // Same percentage as a same-chain crypto withdrawal, but a much smaller
+  // minimum-fee floor — see offramp/fee.ts's own comment on why this
+  // can't just reuse computeCryptoWithdrawalFeeSplit. Computed before
+  // touching the ledger; a null split (amount too small to cover the
+  // minimum fee) must fail before any balance is debited.
+  const split = computeCrossChainSendFeeSplit(input.amount);
   if (!split) {
     throw new Error(
-      `${input.amount} is too small to send cross-chain — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${tokenSymbol} fee.`,
+      `${input.amount} is too small to send cross-chain — it wouldn't cover the minimum ${env.crossChainSendMinFeeUsd} ${tokenSymbol} fee.`,
     );
   }
   const { feeAmount, netAmount } = split;
@@ -131,7 +143,7 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   // from, same liquidity concern a same-chain withdrawal has. Does
   // nothing for a shortfall bigger than this one user's own deposit —
   // correctly not this function's job.
-  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(input.sourceChain) && env.awsKmsPayoutKeyArn) {
+  if (wallet.provider === "aws-kms" && ["celo", "base"].includes(input.sourceChain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
       const { decimals: tokenDecimals } = getTokenConfig(input.sourceChain, tokenSymbol);

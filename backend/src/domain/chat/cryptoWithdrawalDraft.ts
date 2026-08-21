@@ -73,6 +73,15 @@ export async function resolveCryptoWithdrawalIntent(
   if (intent.amount == null || intent.amount <= 0) {
     return { ok: false, message: "How much USDC would you like to withdraw?" };
   }
+  // Same floor the real POST /crypto-withdrawals endpoint enforces (see
+  // env.ts's own comment) — caught here too so a too-small amount is
+  // rejected on the first message, not after every other question.
+  if (intent.amount < Number(env.cryptoWithdrawalMinAmountUsd)) {
+    return {
+      ok: false,
+      message: `${intent.amount} is below the ${env.cryptoWithdrawalMinAmountUsd} ${env.defaultTokenSymbol} minimum for a withdrawal — try a larger amount.`,
+    };
+  }
   if (!intent.toAddress) {
     return { ok: false, message: "What's the destination wallet address?" };
   }

@@ -1,4 +1,4 @@
-export type ChatIntent = "address" | "balance" | "txHistory" | "chains" | "help" | "unknown";
+export type ChatIntent = "address" | "balance" | "txHistory" | "chains" | "crossChainChains" | "help" | "unknown";
 
 const ADDRESS_RE = /\b(deposit address|wallet address|my address|my wallet)\b/i;
 const BALANCE_RE = /\b(balance|deposit status|my deposits?|how much (do i have|is in my (account|wallet)))\b/i;
@@ -10,6 +10,12 @@ const TX_HISTORY_RE = /\b(transaction history|my transactions|recent (sends|tran
 // user's own wallet, not something to leave to the LLM to guess at.
 const CHAINS_RE =
   /\b(which|what) (chain|network|blockchain)s?\b|\b(chain|network|blockchain)s? (supported|do you support)\b|\bsupported (chain|network|blockchain)s?\b/i;
+// Distinguishes "which chains can I deposit to" from "which chains does
+// cross-chain send support" — same CHAINS_RE trigger word, genuinely
+// different answer (deposit chains vs ALL_CROSS_CHAIN_SEND_CHAINS). Without
+// this split, a cross-chain-send question always got buildChainsMessage's
+// deposit-only answer, which never even mentions cross-chain send exists.
+const CROSS_CHAIN_RE = /\bcross[- ]?chain\b|\bbridg(e|ing)\b/i;
 const HELP_RE = /\b(help|what can you do|commands|menu|options)\b/i;
 
 // Deliberately simple keyword matching, not an LLM call — anything that
@@ -22,7 +28,7 @@ export function classifyIntent(message: string): ChatIntent {
   if (ADDRESS_RE.test(t)) return "address";
   if (BALANCE_RE.test(t)) return "balance";
   if (TX_HISTORY_RE.test(t)) return "txHistory";
-  if (CHAINS_RE.test(t)) return "chains";
+  if (CHAINS_RE.test(t)) return CROSS_CHAIN_RE.test(t) ? "crossChainChains" : "chains";
   if (HELP_RE.test(t)) return "help";
   return "unknown";
 }

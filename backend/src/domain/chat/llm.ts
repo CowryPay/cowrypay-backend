@@ -28,7 +28,7 @@ Examples:
 - "Send 5 USDC to GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD" → {"kind":"cryptoWithdrawal","action":"WITHDRAW_TO_WALLET","amount":5,"toAddress":"GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD"}
 - "Send 20 USDT to Nigeria via Celo" → {"kind":"remittance","action":"SEND_REMITTANCE","amount":20,"countryHint":"Nigeria","chainHint":"Celo","tokenHint":"USDT"}
 - "I have 10 USDC on celo but I need it to be on base" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":10,"sourceChainHint":"Celo","destinationChainHint":"Base"}
-- "Move 25 USDC from Solana to Optimism, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":25,"sourceChainHint":"Solana","destinationChainHint":"Optimism","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
+- "Move 25 USDC from Solana to Base, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":25,"sourceChainHint":"Solana","destinationChainHint":"Base","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
 - "I want to send someone on base but I only have celo" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","sourceChainHint":"Celo","destinationChainHint":"Base"}
 - "What's my balance" → {"kind":"admin","action":"BALANCE"}
 - "What can you do" → {"kind":"admin","action":"HELP"}

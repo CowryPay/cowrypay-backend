@@ -36,6 +36,17 @@ import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePh
 // initiateSolanaSourceLeg below.
 const LIFI_CHAIN_IDS: Record<string, number> = { celo: 42220, base: 8453, optimism: 10, solana: 1151111081099710 };
 
+// Which of the chains LI.FI knows about (LIFI_CHAIN_IDS) are actually
+// offered right now — kept separate from LIFI_CHAIN_IDS itself (which
+// stays complete, including optimism, so the rpcUrls map and
+// requireLiFiChainId below don't need touching) mirroring cctpAdapter.ts's
+// own SUPPORTED_CHAINS/getChainDefinition split. Optimism is withheld:
+// deposits on Optimism are on hold (DEPOSIT_CHAINS in
+// ai-agent/chat/intent.ts), so there's no way for a user to hold an
+// Optimism balance to send from yet. Re-enable by adding it back here
+// once Optimism deposits ship.
+const SUPPORTED_CHAINS = new Set(["celo", "base", "solana"]);
+
 // Conservative defaults — not yet tuned against real transfers. slippage
 // is fractional (0.005 = 0.5%); maxPriceImpact hides routes worse than
 // this rather than silently accepting a bad quote.
@@ -165,7 +176,7 @@ async function initiateSolanaSourceLeg(step: LiFiStep): Promise<string> {
 
 export const liFiAdapter: BridgeAdapter = {
   supports(sourceChain: string, destinationChain: string): boolean {
-    return Boolean(LIFI_CHAIN_IDS[sourceChain.toLowerCase()]) && Boolean(LIFI_CHAIN_IDS[destinationChain.toLowerCase()]);
+    return SUPPORTED_CHAINS.has(sourceChain.toLowerCase()) && SUPPORTED_CHAINS.has(destinationChain.toLowerCase());
   },
 
   async quote(input): Promise<BridgeQuote> {

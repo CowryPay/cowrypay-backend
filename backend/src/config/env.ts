@@ -100,6 +100,33 @@ export const env = {
   // route them to separate wallets per chain.
   cryptoWithdrawalFeeBps: Number(process.env.CRYPTO_WITHDRAWAL_FEE_BPS ?? 30),
   cryptoWithdrawalMinFeeUsd: process.env.CRYPTO_WITHDRAWAL_MIN_FEE_USD ?? "0.1",
+  // A separate, explicit minimum SEND amount — the min-fee floor above
+  // only guards the platform's own fee revenue (a $0.11 withdrawal would
+  // pass it, netting $0.01), not whether the withdrawal is worth doing at
+  // all against real on-chain gas. Same pattern as
+  // crossChainSendMinAmountUsd, sized lower here since a same-chain
+  // withdrawal has none of that flow's extra bridge/slippage cost.
+  cryptoWithdrawalMinAmountUsd: process.env.CRYPTO_WITHDRAWAL_MIN_AMOUNT_USD ?? "1",
+  // A cross-chain send has real costs computeCryptoWithdrawalFeeSplit's
+  // own min-fee floor was never sized for: CCTP's destination-chain mint
+  // still needs real gas, and LI.FI's Celo legs go through an actual swap
+  // with slippage. Sized deliberately low (not $5+) — verified live against
+  // LI.FI's real quote API (2026-08-21) that a $2 Celo->Base send only
+  // loses ~2.2% to the bridge itself (LI.FI's fixed + percentage fee);
+  // the point of this feature is to undercut a user bridging manually
+  // (who'd need to already hold native gas on the source chain just to
+  // try), not to match a same-chain withdrawal's economics. Checked
+  // against the gross amount (what the user typed), before any fee split
+  // — see crossChainSend/service.ts and chat/crossChainSendDraft.ts.
+  crossChainSendMinAmountUsd: process.env.CROSS_CHAIN_SEND_MIN_AMOUNT_USD ?? "2",
+  // A separate, much smaller minimum fee than cryptoWithdrawalMinFeeUsd
+  // ($0.1) — that flat floor is what actually made a $2 cross-chain send
+  // look expensive (5% of $2, before LI.FI's own ~2.2% on top), not the
+  // bridge's real cost. Kept as its own knob (not just reusing
+  // cryptoWithdrawalMinFeeUsd) so this flow's affordability goal can be
+  // tuned independently of same-chain withdrawal fee revenue. See
+  // offramp/fee.ts's computeCrossChainSendFeeSplit.
+  crossChainSendMinFeeUsd: process.env.CROSS_CHAIN_SEND_MIN_FEE_USD ?? "0.02",
   // Dedicated fee-only treasury addresses for Stellar/Solana — deliberately
   // separate from those chains' own shared deposit/operational treasury
   // (STELLAR_DEPOSIT_ADDRESS, the Solana treasury signer), mirroring how

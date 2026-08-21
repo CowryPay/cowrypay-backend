@@ -10,6 +10,7 @@ import {
   buildAddressMessage,
   buildBalanceMessage,
   buildChainsMessage,
+  buildCrossChainSendChainsMessage,
   buildHelpMessage,
   buildSolanaAddressMessage,
   buildStellarAddressMessage,
@@ -181,6 +182,11 @@ export async function handleChatMessage(userId: string, message: string): Promis
     const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
     if (!wallet) throw new Error("No wallet found for user");
     return { reply: buildChainsMessage(wallet) };
+  }
+
+  if (intent === "crossChainChains") {
+    await touchSession(userId);
+    return { reply: buildCrossChainSendChainsMessage() };
   }
 
   if (intent === "help") {

@@ -1,6 +1,7 @@
 import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 import { formatAmount } from "../../utils/format.js";
 import { DEPOSIT_CHAINS } from "./intent.js";
+import { ALL_CROSS_CHAIN_SEND_CHAINS } from "../../domain/chat/crossChainSendDraft.js";
 
 // The non-EVM chains, each needing their own separate deposit address —
 // everything else in DEPOSIT_CHAINS shares one EVM address. Kept as an
@@ -111,6 +112,16 @@ export function buildChainsMessage(wallet: Wallet): string {
       ? `${formatChainList(EVM_DEPOSIT_CHAINS)} all share the same deposit address`
       : `${capitalize(wallet.chain)} (your only EVM network right now)`;
   return `You can deposit USDC on several networks: ${evmPart}. Stellar and Solana each need their own separate address — just say "I want to deposit via Stellar" or "...via Solana" to get it.`;
+}
+
+// Answers "which chains does cross-chain send support" — deliberately
+// separate from buildChainsMessage (that one describes DEPOSIT chains, a
+// different question that happens to use the same trigger word "chains";
+// see intent.ts's CROSS_CHAIN_RE split). ALL_CROSS_CHAIN_SEND_CHAINS is
+// crossChainSendDraft.ts's own single source of truth — same chains it
+// asks about mid-flow, so this list can't drift from what actually works.
+export function buildCrossChainSendChainsMessage(): string {
+  return `Cross-chain send currently works between these chains: ${formatChainList(ALL_CROSS_CHAIN_SEND_CHAINS)} — move USDC from any one of them to any other. Just say something like "send 10 USDC from Celo to Base" (or to someone else's address) and I'll take it from there.`;
 }
 
 function capitalize(s: string): string {

@@ -2,18 +2,24 @@ import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
-import { computeCryptoWithdrawalFeeSplit } from "../offramp/fee.js";
+import { computeCrossChainSendFeeSplit } from "../offramp/fee.js";
 import { getTokenConfig } from "../wallets/chains.js";
 import { getBridgeAdapter } from "../crossChainSend/bridge/index.js";
 import { env } from "../../config/env.js";
 import { formatAmount } from "../../utils/format.js";
 import type { ParsedIntent } from "./schemas.js";
 
-// The 4 chains that ever participate in a working cross-chain-send pair
-// today (see crossChainSend/bridge/cctpAdapter.ts and liFiAdapter.ts) —
-// Stellar isn't included since no viable native-USDC path has been found
-// for it yet through any bridge checked.
-const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "optimism", "solana"];
+// The chains that currently participate in a working cross-chain-send
+// pair (see crossChainSend/bridge/cctpAdapter.ts and liFiAdapter.ts's own
+// SUPPORTED_CHAINS sets — this list must stay in sync with those, since
+// this is what gates the chat flow before either adapter is even
+// consulted). Stellar isn't included since no viable native-USDC path has
+// been found for it yet through any bridge checked. Optimism isn't
+// included either, even though its CCTP/LI.FI signing paths both exist —
+// deposits on Optimism are on hold (DEPOSIT_CHAINS in
+// ai-agent/chat/intent.ts), so no user can actually hold an Optimism
+// balance to send from yet. Re-add once Optimism deposits ship.
+export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana"];
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -64,6 +70,16 @@ export async function resolveCrossChainSendIntent(
 ): Promise<CrossChainSendResolution> {
   if (intent.amount == null || intent.amount <= 0) {
     return { ok: false, message: "How much USDC would you like to send?" };
+  }
+  // Same floor the real POST /cross-chain-sends endpoint enforces (see
+  // env.ts's own comment) — checked here too so a too-small amount gets
+  // caught on the first message of a multi-turn draft, not after the user
+  // has already answered every other question.
+  if (intent.amount < Number(env.crossChainSendMinAmountUsd)) {
+    return {
+      ok: false,
+      message: `${intent.amount} is below the ${env.crossChainSendMinAmountUsd} ${env.defaultTokenSymbol} minimum for a cross-chain send — try a larger amount.`,
+    };
   }
   if (!intent.toAddress) {
     return { ok: false, message: "What's the destination wallet address?" };
@@ -119,7 +135,7 @@ export async function resolveCrossChainSendIntent(
 
   // Omitted means USDC, the only token that existed before USDT support.
   const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
-  if (["celo", "base", "optimism"].includes(sourceChain)) {
+  if (["celo", "base"].includes(sourceChain)) {
     try {
       getTokenConfig(sourceChain, tokenSymbol);
     } catch (err) {
@@ -146,15 +162,16 @@ export async function resolveCrossChainSendIntent(
     };
   }
 
-  // Same split the real POST /cross-chain-sends endpoint computes — no
-  // cross-chain premium (product decision), shown here up front so it's
-  // not a surprise at PIN-entry time. A null split means the amount can't
-  // even cover the minimum fee.
-  const split = computeCryptoWithdrawalFeeSplit(amountStr);
+  // Same split the real POST /cross-chain-sends endpoint computes — see
+  // offramp/fee.ts's own comment on why this is a smaller, dedicated
+  // floor rather than reusing computeCryptoWithdrawalFeeSplit. Shown here
+  // up front so it's not a surprise at PIN-entry time. A null split means
+  // the amount can't even cover the minimum fee.
+  const split = computeCrossChainSendFeeSplit(amountStr);
   if (!split) {
     return {
       ok: false,
-      message: `${amountStr} ${tokenSymbol} is too small to send cross-chain — it wouldn't cover the minimum ${env.cryptoWithdrawalMinFeeUsd} ${tokenSymbol} fee. Try a larger amount.`,
+      message: `${amountStr} ${tokenSymbol} is too small to send cross-chain — it wouldn't cover the minimum ${env.crossChainSendMinFeeUsd} ${tokenSymbol} fee. Try a larger amount.`,
     };
   }
 

@@ -26,13 +26,29 @@ export function computeFeeSplit(amount: string): FeeSplit {
 // stance as ledgerRepo.debitAvailable's insufficient-balance guard) when
 // the amount can't even cover the minimum fee, since that's an expected,
 // user-correctable outcome, not a fault.
-export function computeCryptoWithdrawalFeeSplit(amount: string): FeeSplit | null {
+function computeFeeSplitWithFloor(amount: string, minFeeUsd: string): FeeSplit | null {
   const amountNum = Number(amount);
   const pctFee = Math.round(amountNum * env.cryptoWithdrawalFeeBps) / 10_000;
-  const feeAmount = Math.max(pctFee, Number(env.cryptoWithdrawalMinFeeUsd));
+  const feeAmount = Math.max(pctFee, Number(minFeeUsd));
   if (feeAmount >= amountNum) return null;
   const netAmount = Math.round((amountNum - feeAmount) * 1_000_000) / 1_000_000;
   return { feeAmount: String(feeAmount), netAmount: String(netAmount) };
+}
+
+export function computeCryptoWithdrawalFeeSplit(amount: string): FeeSplit | null {
+  return computeFeeSplitWithFloor(amount, env.cryptoWithdrawalMinFeeUsd);
+}
+
+// Same percentage as a same-chain withdrawal, but a much smaller floor
+// (env.crossChainSendMinFeeUsd, $0.02 by default vs $0.1) — deliberately
+// NOT computeCryptoWithdrawalFeeSplit. That $0.1 floor is flat, so it's
+// what made a $2 cross-chain send look expensive (5% of $2) before this
+// existed; the bridge itself (LI.FI/CCTP) already charges its own real
+// cost on top, and this flow's whole point is undercutting a user
+// bridging manually, not matching same-chain withdrawal fee economics.
+// See env.ts's own comment for the live numbers this was sized against.
+export function computeCrossChainSendFeeSplit(amount: string): FeeSplit | null {
+  return computeFeeSplitWithFloor(amount, env.crossChainSendMinFeeUsd);
 }
 
 // Chain-aware — a real, live bug until fixed: this used to return one
