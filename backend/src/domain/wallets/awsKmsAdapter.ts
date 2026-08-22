@@ -10,6 +10,7 @@ import {
   numberToHex,
   encodeFunctionData,
   parseUnits,
+  parseEther,
 } from "viem";
 import { env } from "../../config/env.js";
 import { getChainConfig, getTokenConfig } from "./chains.js";
@@ -292,3 +293,46 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     return { txHash, status: "PENDING" };
   },
 };
+
+// One-off ops tool for moving the payout wallet's own NATIVE gas token
+// (CELO/ETH, not USDC/USDT) to another address — e.g. topping up gas on a
+// different wallet the operator controls. Deliberately separate from
+// WalletAdapter.withdraw() above (which is USDC/USDT-only, per
+// WithdrawInput's tokenSymbol) rather than overloading it, since a native
+// transfer has no token contract or decimals lookup at all — but it goes
+// through the EXACT same nonce-claiming path (claimNonce/resyncNonce
+// inside the same evm-nonce:<chain> advisory lock) as every real payout
+// from this wallet, for the same reason withdraw() does: an independent
+// script signing its own transaction would read the chain's nonce outside
+// that lock and could collide with a concurrent real send.
+export async function sendNativeToken(chain: string, toAddress: `0x${string}`, amountEther: string): Promise<`0x${string}`> {
+  if (!env.awsKmsPayoutKeyArn) {
+    throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set when WALLET_PROVIDER=aws-kms");
+  }
+  const { viemChain, rpcUrl } = getChainConfig(chain);
+
+  const client = kmsClient();
+  const payoutAddress = await fetchAddressForKey(client, env.awsKmsPayoutKeyArn);
+  const account = kmsAccountFromKey(env.awsKmsPayoutKeyArn, payoutAddress);
+
+  const walletClient = createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
+  const value = parseEther(amountEther);
+
+  const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
+
+  async function send(nonce: number): Promise<`0x${string}`> {
+    return walletClient.sendTransaction({ to: toAddress, value, nonce });
+  }
+
+  return withAdvisoryLock(`evm-nonce:${chain}`, async () => {
+    const nonce = await claimNonce(chain, fetchFreshNonce);
+    try {
+      return await send(nonce);
+    } catch (err) {
+      if (!isNonceError(err)) throw err;
+      resyncNonce(chain);
+      const freshNonce = await claimNonce(chain, fetchFreshNonce);
+      return await send(freshNonce);
+    }
+  });
+}
