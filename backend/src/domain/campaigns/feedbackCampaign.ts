@@ -24,7 +24,7 @@ export function buildFeedbackCampaignEmail(unsubscribeUrl: string): { html: stri
             </tr>
             <tr>
               <td style="padding:32px 32px 8px 32px;">
-                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">Hi there,</p>
+                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">Hi, good day, and happy new week! 👋</p>
                 <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">
                   You've been with CowryPay since the early days, and we'd really love to hear from you.
                 </p>
@@ -86,7 +86,7 @@ export function buildFeedbackCampaignEmail(unsubscribeUrl: string): { html: stri
   </body>
 </html>`;
 
-  const text = `Hi there,
+  const text = `Hi, good day, and happy new week!
 
 You've been with CowryPay since the early days, and we'd really love to hear from you.
 
