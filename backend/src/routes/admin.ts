@@ -50,6 +50,16 @@ adminRouter.get("/admin/metrics/timeseries", async (req: Request, res: Response)
   res.json({ days, timeseries });
 });
 
+// One-off export for ops use (product-update / feedback-request emails,
+// etc.) — full admin key, not the metrics-scoped one, since PII (real
+// user emails) is more sensitive than the aggregate numbers everything
+// else on that key exposes.
+adminRouter.get("/admin/users/emails", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const users = await adminRepo.listUserEmails();
+  res.json({ count: users.length, users });
+});
+
 // Live on-chain balances, not anything derived from our own DB — two
 // distinct groups: feeTreasury is what the platform has actually earned
 // (the 3 dedicated fee-sweep addresses), operational is what pays out

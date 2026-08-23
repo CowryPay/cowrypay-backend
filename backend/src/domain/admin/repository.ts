@@ -502,4 +502,14 @@ export const adminRepo = {
       amount: r.amount,
     }));
   },
+
+  // Read-only export for ops use (e.g. a one-off product-update or
+  // feedback-request email) — deliberately just id/email/createdAt, not a
+  // general "dump the users table" endpoint.
+  async listUserEmails(): Promise<Array<{ id: string; email: string; createdAt: string }>> {
+    const { rows } = await pool.query(
+      `select id, email, created_at from users where email is not null and email <> '' order by created_at asc`,
+    );
+    return rows.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at }));
+  },
 };
