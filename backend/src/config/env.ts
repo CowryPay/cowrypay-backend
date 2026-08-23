@@ -244,4 +244,20 @@ export const env = {
   // (unlike Stellar/Solana, which default to testnet), so this matches
   // that default rather than introducing a third convention.
   cctpEnvironment: process.env.CCTP_ENVIRONMENT ?? "mainnet",
+  // One-off/marketing campaign sends (domain/campaigns) — a separate,
+  // narrower concern from every other integration above, all of which are
+  // core money-movement rails. Only required when a campaign is actually
+  // triggered — checked lazily by campaigns/resendClient.ts, not here.
+  // Resend requires sending FROM a domain you've verified with them via
+  // DNS (SPF/DKIM) — a plain gmail.com address can't be used here, which
+  // is why this is a distinct address from the cowrypay.xyz@gmail.com
+  // inbox used for manual sends.
+  resendApiKey: process.env.RESEND_API_KEY,
+  campaignFromEmail: process.env.CAMPAIGN_FROM_EMAIL ?? "CowryPay <feedback@cowrypay.xyz>",
+  // Signs unsubscribe links (HMAC over the recipient's email) so
+  // GET /campaigns/unsubscribe can't be used to unsubscribe an address the
+  // link wasn't actually generated for. No hardcoded fallback, same
+  // reasoning as publicBaseUrl above — a guessed secret is worse than an
+  // explicit unset (link generation just fails loudly instead).
+  campaignUnsubscribeSecret: process.env.CAMPAIGN_UNSUBSCRIBE_SECRET,
 };
