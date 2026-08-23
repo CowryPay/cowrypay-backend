@@ -46,10 +46,17 @@ export function buildFeedbackCampaignEmail(unsubscribeUrl: string): { html: stri
                 </p>
                 <hr style="border:none;border-top:1px solid #e7e3da;margin:0 0 28px 0;" />
                 <p style="margin:0 0 12px 0;color:#12172b;font-size:16px;font-weight:700;">🚀 Also, something new</p>
+                <p style="margin:0 0 12px 0;color:#12172b;font-size:16px;line-height:1.6;">
+                  We've just launched <strong>Cross-Chain Send</strong> — you can now move stablecoins between
+                  chains without manually bridging anything yourself. For example: you have USDC on Celo, but
+                  you need to send it to someone on Base.
+                </p>
                 <p style="margin:0 0 16px 0;color:#12172b;font-size:16px;line-height:1.6;">
-                  We've just launched <strong>Cross-Chain Send</strong>. You can now send stablecoins across
-                  Celo, Base, Optimism, and Solana without manually bridging assets or switching between
-                  different wallets. Just tell CowryPay what you want to send, and we handle the routing for you.
+                  Just tell the AI: <em>"I want to send my USDC on Celo to someone on Base"</em> — and CowryPay
+                  handles the rest.
+                </p>
+                <p style="margin:0 0 16px 0;color:#4a5068;font-size:14px;line-height:1.6;">
+                  Supported chains: <strong>Celo, Base, and Solana</strong>.
                 </p>
                 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 32px 0;">
                   <tr>
@@ -91,7 +98,11 @@ Your responses will directly help us decide what we build next.
 
 ---
 
-Also, something new: we've just launched Cross-Chain Send. You can now send stablecoins across Celo, Base, Optimism, and Solana without manually bridging assets or switching between different wallets. Just tell CowryPay what you want to send, and we handle the routing for you.
+Also, something new: we've just launched Cross-Chain Send — you can now move stablecoins between chains without manually bridging anything yourself. For example: you have USDC on Celo, but you need to send it to someone on Base.
+
+Just tell the AI: "I want to send my USDC on Celo to someone on Base" — and CowryPay handles the rest.
+
+Supported chains: Celo, Base, and Solana.
 
 Try CowryPay: ${APP_URL}
 
