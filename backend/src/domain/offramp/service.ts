@@ -174,10 +174,28 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // registered under env.defaultChain — one KMS/Blockradar address covers
   // all of them, so "which EVM chain to send from" (input.chain) and
   // "which wallet row to look up" are different questions there. Stellar
-  // is the one genuine exception: its shared-address wallet is its own
-  // row, keyed under "stellar" specifically.
+  // and Solana are both genuine exceptions: each has its own dedicated
+  // wallet row, keyed under its own chain name. Mirrors
+  // cryptoWithdrawals/service.ts's walletChainKeyFor exactly — this used
+  // to only special-case "stellar", which meant a Solana send fetched the
+  // user's EVM wallet row instead of their Solana one. That wrong `wallet`
+  // was still only used for its `.provider` field further down (`chain`
+  // itself came from effectiveChainInput, so routing was never wrong) —
+  // but that provider field is now aws-kms for virtually every user after
+  // the Blockradar cutover, which made `wallet.provider === "aws-kms"`
+  // true for a Solana send too, wrongly triggering the EVM-only
+  // post-payout confirmation wait below on a Solana chain — see that
+  // block's own comment for what that produced live (2026-08-25, send
+  // fa6e221f): a real, successful Solana payout reported to the user as
+  // failed, because the confirmation check crashed on "solana" being an
+  // unsupported EVM chain in chains.ts, after the money had already gone.
   const effectiveChainInput = lockedPreview?.chain ?? input.chain;
-  const walletChainKey = effectiveChainInput?.toLowerCase() === "stellar" ? "stellar" : env.defaultChain;
+  const walletChainKey =
+    effectiveChainInput?.toLowerCase() === "stellar"
+      ? "stellar"
+      : effectiveChainInput?.toLowerCase() === "solana"
+        ? "solana"
+        : env.defaultChain;
   const wallet = await walletsRepo.findByUserIdAndChain(userId, walletChainKey);
   if (!wallet) throw new Error("No wallet found for user");
   const chain = effectiveChainInput ?? wallet.chain;
@@ -408,8 +426,16 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // swept as if it had succeeded, until a user reported funds not
   // arriving. Waits for a real on-chain outcome before this send is ever
   // treated as done. See waitForEvmPayoutConfirmation's own comment for
-  // why this is scoped to aws-kms only.
-  if (wallet.provider === "aws-kms" && payout.txHash) {
+  // why this is scoped to aws-kms only. The explicit chain check is
+  // deliberate, not redundant with wallet.provider === "aws-kms" alone —
+  // that provider check was the exact gap that let this misfire on a
+  // Solana send (see the walletChainKey comment above): `wallet` can, in
+  // principle, be the wrong row again some other way in the future, but
+  // `chain` itself is always correct (it's `effectiveChainInput`, never
+  // derived from `wallet`), so gating on it too means this block can
+  // never again run getReceiptStatus against a chain chains.ts doesn't
+  // know, no matter what wallet.provider says.
+  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain.toLowerCase()) && payout.txHash) {
     const confirmation = await waitForEvmPayoutConfirmation(chain, payout.txHash);
 
     if (confirmation === "reverted") {
