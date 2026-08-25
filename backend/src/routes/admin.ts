@@ -9,6 +9,7 @@ import { sendsRepo } from "../domain/offramp/repository.js";
 import { withTransaction } from "../db/pool.js";
 import type { SendState } from "../types.js";
 import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
+import { solanaWalletAdapter } from "../domain/wallets/solanaAdapter.js";
 import { sendNativeToken } from "../domain/wallets/awsKmsAdapter.js";
 import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
@@ -344,6 +345,44 @@ adminRouter.post("/admin/stellar/treasury-transfer", async (req: Request, res: R
     const result = await stellarWalletAdapter.withdraw({
       chain: "stellar",
       tokenSymbol: "USDC",
+      toAddress: parsed.data.toAddress,
+      amount: parsed.data.amount,
+      reference: parsed.data.reference,
+    });
+    res.json({ ok: true, txHash: result.txHash, status: result.status });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+const SolanaTreasuryTransferSchema = z.object({
+  toAddress: z.string().min(1),
+  amount: z.string().min(1),
+  reference: z.string().min(1),
+  tokenSymbol: z.string().min(1).default("USDC"),
+});
+
+// Solana equivalent of /admin/stellar/treasury-transfer above — same
+// one-off ops need (e.g. sweeping a send's fee_amount to the fee treasury
+// after the confirmation-wait bug fixed in 99db41f left it unswept, since
+// that crash happened before the normal fee-sweep step in
+// offramp/service.ts ever ran). Goes through solanaWalletAdapter.withdraw
+// rather than a standalone script for the same reason as the Stellar
+// version: the treasury signer's real balance/ATA state should only ever
+// be touched via the app's own adapter, not a script racing it outside
+// the process.
+adminRouter.post("/admin/solana/treasury-transfer", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = SolanaTreasuryTransferSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  try {
+    const result = await solanaWalletAdapter.withdraw({
+      chain: "solana",
+      tokenSymbol: parsed.data.tokenSymbol,
       toAddress: parsed.data.toAddress,
       amount: parsed.data.amount,
       reference: parsed.data.reference,
