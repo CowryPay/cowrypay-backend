@@ -1,4 +1,17 @@
 import "dotenv/config";
+// Must load before any router is registered — patches Express 4's Router
+// so a rejected promise inside an async route handler reaches the error
+// middleware below via next(err), instead of becoming an unhandled
+// rejection. Real incident this fixes: Express 4 does NOT catch async
+// throws on its own, and this process has no unhandledRejection handler
+// either, so Node's own default behavior (crash the whole process) was
+// taking down EVERY in-flight request — not just the one that errored —
+// on any single unexpected error (e.g. a malformed :id param hitting a
+// uuid column). A user's cross-chain-send receipt lookup hanging then
+// failing with a generic network error is exactly this: the backend
+// process crashed mid-request and Railway restarted it, dropping the
+// connection.
+import "express-async-errors";
 import cors from "cors";
 import express from "express";
 import { env } from "./config/env.js";
@@ -36,7 +49,24 @@ import { startSolanaAtaReclaimer } from "./domain/wallets/solanaAtaReclaimer.js"
 import { startGasStatusMonitor } from "./domain/monitoring/gasStatusMonitor.js";
 import { startDoubleCreditMonitor } from "./domain/monitoring/doubleCreditMonitor.js";
 import { startSolanaWebhookReconciler } from "./domain/monitoring/solanaWebhookReconciler.js";
+import { startReserveMonitor } from "./domain/monitoring/reserveMonitor.js";
 import { startCrossChainSendConfirmationPoller } from "./domain/crossChainSend/crossChainSendConfirmationPoller.js";
+
+// Defense-in-depth beyond the express-async-errors + error-middleware fix
+// above, which only covers the request/response cycle — this catches
+// anything outside it (a background job's own setInterval callback
+// missing its own .catch, a truly async fire-and-forget path). Node
+// terminates the whole process by default on either of these since v15;
+// logging and staying up is the right call here given every poller in
+// this codebase already treats a single bad tick as recoverable, not
+// fatal, and taking down every in-flight request over one unexpected
+// error is exactly the failure mode this whole change exists to stop.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandled-rejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaught-exception]", err);
+});
 
 const app = express();
 app.use(cors({ origin: env.corsOrigins ?? true }));
@@ -62,6 +92,28 @@ app.use(cryptoWithdrawalsRouter);
 app.use(crossChainSendsRouter);
 app.use(campaignsRouter);
 
+// Last-resort catch-all — every route above already handles its OWN
+// expected failures (validation, insufficient balance, etc.) with a clear
+// message via its own try/catch, same as before. This exists for genuinely
+// unexpected errors (a malformed :id crashing deep in a repo query, a
+// transient DB blip) that would otherwise become an unhandled rejection —
+// see the express-async-errors import up top for why that used to crash
+// the entire process instead of just failing the one request. Deliberately
+// does NOT echo err.message to the client (unlike the deliberate
+// try/catches elsewhere, which show real business-logic messages by
+// design) — an unexpected error's raw message could contain internals
+// (SQL fragments, stack detail) never meant to reach a response body.
+// Express identifies this as error-handling middleware purely by its
+// 4-argument signature — it must stay last, after every other app.use.
+app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error(`[unhandled] ${req.method} ${req.path}:`, err);
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  res.status(500).json({ error: "Something went wrong on our end — please try again." });
+});
+
 app.listen(env.port, () => {
   console.log(`CowryPay backend  →  http://localhost:${env.port}`);
 });
@@ -79,4 +131,5 @@ startSolanaAtaReclaimer();
 startGasStatusMonitor();
 startDoubleCreditMonitor();
 startSolanaWebhookReconciler();
+startReserveMonitor();
 startCrossChainSendConfirmationPoller();
