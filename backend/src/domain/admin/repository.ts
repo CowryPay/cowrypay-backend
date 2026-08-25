@@ -1,5 +1,6 @@
 import { pool } from "../../db/pool.js";
 import { formatAmount } from "../../utils/format.js";
+import { getTreasurySnapshot, type ReconciliationRow } from "./treasury.js";
 
 // node-pg parses a `date` column into a JS Date at UTC midnight — this
 // normalizes it back to the same "YYYY-MM-DD" string used as the map key
@@ -61,22 +62,61 @@ export interface AdminMetrics {
     // so this can't be quoted as if every attempt were real, moved money.
     sends: { total: number; settled: number };
     deposits: { total: number; settled: number };
-    byChain: { chain: string; sends: number; deposits: number }[];
+    // cryptoWithdrawals/crossChainSends were missing entirely until this
+    // was added (2026-08-21) — two of the four ways money actually leaves
+    // the platform had zero admin volume visibility. crossChainSends'
+    // "settled" is its own COMPLETE state, not sends'/deposits' terminal
+    // states — see cross_chain_sends' own check constraint.
+    cryptoWithdrawals: { total: number; settled: number };
+    crossChainSends: { total: number; settled: number };
+    // crossChainSends is keyed by SOURCE chain here (the chain actually
+    // debited) — a cross-chain send has two chains, and "which chain did
+    // this transaction's volume come FROM" is the same question byChain
+    // already answers for sends/deposits/withdrawals.
+    byChain: { chain: string; sends: number; deposits: number; cryptoWithdrawals: number; crossChainSends: number }[];
   };
-  // Only settled amounts (sends: COMPLETE, deposits: BALANCE_CREDITED) —
-  // volume from failed/pending attempts isn't real on-chain volume.
+  // Only settled amounts (sends: COMPLETE, deposits: BALANCE_CREDITED,
+  // cryptoWithdrawals: CONFIRMED, crossChainSends: COMPLETE) — volume from
+  // failed/pending attempts isn't real on-chain volume. Plain numeric
+  // strings, no currency symbol — see the field names for what they are;
+  // formatting for display (a "$", comma grouping, etc.) is the
+  // frontend's job, not this API's.
   onChainVolume: {
     sentUsdc: string;
     depositedUsdc: string;
-    byChain: { chain: string; sentUsdc: string; depositedUsdc: string }[];
+    withdrawnUsdc: string;
+    crossChainSentUsdc: string;
+    byChain: {
+      chain: string;
+      sentUsdc: string;
+      depositedUsdc: string;
+      withdrawnUsdc: string;
+      crossChainSentUsdc: string;
+    }[];
   };
-  // Platform fee actually captured on settled sends only — a fee swept
-  // from a send that later gets refunded/fails isn't real revenue (see
-  // offramp/service.ts's fee-sweep step, which runs on broadcast, before
-  // Paycrest's final settlement confirms).
+  // Platform fee actually captured on settled transactions only — a fee
+  // swept from a send that later gets refunded/fails isn't real revenue
+  // (see offramp/service.ts's fee-sweep step, which runs on broadcast,
+  // before Paycrest's final settlement confirms). Same reasoning now
+  // applied to cryptoWithdrawals/crossChainSends fee revenue, which was
+  // previously invisible here even though both flows charge a real fee
+  // (see offramp/fee.ts's computeCryptoWithdrawalFeeSplit/
+  // computeCrossChainSendFeeSplit).
   revenue: {
     totalFeesUsdc: string;
     byChain: { chain: string; feesUsdc: string }[];
+  };
+  // The actual "prove you're solvent" answer for a funding conversation —
+  // reuses treasury.ts's own live on-chain reconciliation (GET
+  // /admin/treasury) rather than recomputing it, so there's one source of
+  // truth for what "fully reserved" means. fullyReserved is conservative
+  // on purpose: an UNKNOWN row (an on-chain read that failed, not
+  // necessarily a real shortfall) still blocks a clean "yes" — better to
+  // under-claim than assert solvency off a chain we couldn't actually
+  // verify just now.
+  reserves: {
+    fullyReserved: boolean;
+    breakdown: ReconciliationRow[];
   };
 }
 
@@ -84,8 +124,15 @@ export interface AdminMetricsDay {
   date: string; // YYYY-MM-DD
   sendsCount: number;
   depositsCount: number;
+  cryptoWithdrawalsCount: number;
+  crossChainSendsCount: number;
   sentUsdc: string;
   depositedUsdc: string;
+  withdrawnUsdc: string;
+  crossChainSentUsdc: string;
+  // Combined across all three fee-charging flows (sends, cryptoWithdrawals,
+  // crossChainSends) — same "one revenue number per period" framing
+  // getMetrics()'s totalFeesUsdc uses, not a per-flow breakdown.
   feesUsdc: string;
 }
 
@@ -202,14 +249,29 @@ export const adminRepo = {
       sendsSettled,
       depositsTotal,
       depositsSettled,
+      withdrawalsTotal,
+      withdrawalsSettled,
+      crossChainTotal,
+      crossChainSettled,
       sendsByChain,
       depositsByChain,
+      withdrawalsByChain,
+      crossChainByChain,
       volumeSentByChain,
       volumeDepositedByChain,
-      revenueByChain,
+      volumeWithdrawnByChain,
+      volumeCrossChainByChain,
+      feesBySendChain,
+      feesByWithdrawalChain,
+      feesByCrossChainChain,
       totalSent,
       totalDeposited,
-      totalFees,
+      totalWithdrawn,
+      totalCrossChainSent,
+      totalSendFees,
+      totalWithdrawalFees,
+      totalCrossChainFees,
+      treasurySnapshot,
     ] = await Promise.all([
       pool.query(`select count(*)::int as count from wallets`),
       pool.query(`select count(*)::int as count from users`),
@@ -245,8 +307,19 @@ export const adminRepo = {
       pool.query(`select count(*)::int as count from sends where state = 'COMPLETE'`),
       pool.query(`select count(*)::int as count from deposits`),
       pool.query(`select count(*)::int as count from deposits where state = 'BALANCE_CREDITED'`),
+      pool.query(`select count(*)::int as count from crypto_withdrawals`),
+      pool.query(`select count(*)::int as count from crypto_withdrawals where state = 'CONFIRMED'`),
+      pool.query(`select count(*)::int as count from cross_chain_sends`),
+      pool.query(`select count(*)::int as count from cross_chain_sends where state = 'COMPLETE'`),
       pool.query(`select chain, count(*)::int as count from sends group by chain order by chain`),
       pool.query(`select chain, count(*)::int as count from deposits group by chain order by chain`),
+      pool.query(`select chain, count(*)::int as count from crypto_withdrawals group by chain order by chain`),
+      // Grouped by SOURCE chain — see AdminMetrics's own doc comment on why
+      // a cross-chain send's "chain" for volume/count purposes is the one
+      // it actually debited from, not the destination.
+      pool.query(
+        `select source_chain as chain, count(*)::int as count from cross_chain_sends group by source_chain order by source_chain`,
+      ),
       pool.query(
         `select chain, coalesce(sum(amount_human), 0) as total from sends where state = 'COMPLETE' group by chain order by chain`,
       ),
@@ -254,7 +327,19 @@ export const adminRepo = {
         `select chain, coalesce(sum(amount), 0) as total from deposits where state = 'BALANCE_CREDITED' group by chain order by chain`,
       ),
       pool.query(
+        `select chain, coalesce(sum(amount_human), 0) as total from crypto_withdrawals where state = 'CONFIRMED' group by chain order by chain`,
+      ),
+      pool.query(
+        `select source_chain as chain, coalesce(sum(amount_human), 0) as total from cross_chain_sends where state = 'COMPLETE' group by source_chain order by source_chain`,
+      ),
+      pool.query(
         `select chain, coalesce(sum(fee_amount), 0) as total from sends where state = 'COMPLETE' group by chain order by chain`,
+      ),
+      pool.query(
+        `select chain, coalesce(sum(fee_amount), 0) as total from crypto_withdrawals where state = 'CONFIRMED' group by chain order by chain`,
+      ),
+      pool.query(
+        `select source_chain as chain, coalesce(sum(fee_amount), 0) as total from cross_chain_sends where state = 'COMPLETE' group by source_chain order by source_chain`,
       ),
       // Summed once more directly in SQL rather than adding up the
       // per-chain numeric strings above in JS — a Number() round-trip on
@@ -262,38 +347,79 @@ export const adminRepo = {
       // ledger write in this codebase) deliberately avoids.
       pool.query(`select coalesce(sum(amount_human), 0) as total from sends where state = 'COMPLETE'`),
       pool.query(`select coalesce(sum(amount), 0) as total from deposits where state = 'BALANCE_CREDITED'`),
+      pool.query(`select coalesce(sum(amount_human), 0) as total from crypto_withdrawals where state = 'CONFIRMED'`),
+      pool.query(`select coalesce(sum(amount_human), 0) as total from cross_chain_sends where state = 'COMPLETE'`),
       pool.query(`select coalesce(sum(fee_amount), 0) as total from sends where state = 'COMPLETE'`),
+      pool.query(`select coalesce(sum(fee_amount), 0) as total from crypto_withdrawals where state = 'CONFIRMED'`),
+      pool.query(`select coalesce(sum(fee_amount), 0) as total from cross_chain_sends where state = 'COMPLETE'`),
+      // Only piece of getMetrics() that isn't a plain DB aggregate — this
+      // one does live on-chain reads across every chain (same call
+      // GET /admin/treasury makes). Run alongside everything else in this
+      // Promise.all rather than after it, so it doesn't add its own
+      // sequential RTT on top of the DB queries.
+      getTreasurySnapshot(),
     ]);
 
-    // sends/deposits per-chain counts and sent/deposited volume are each
-    // separate group-by queries (different tables, different filters) —
-    // merged here into one row per chain rather than forcing a single SQL
-    // query to outer-join three independently-shaped aggregates.
+    // Per-chain counts/volume/fees are each separate group-by queries
+    // (different tables, different filters, cross-chain-sends grouped by
+    // source_chain) — merged here into one row per chain rather than
+    // forcing a single SQL query to outer-join five independently-shaped
+    // aggregates.
     const chains = new Set<string>([
       ...sendsByChain.rows.map((r) => r.chain),
       ...depositsByChain.rows.map((r) => r.chain),
+      ...withdrawalsByChain.rows.map((r) => r.chain),
+      ...crossChainByChain.rows.map((r) => r.chain),
     ]);
     const sendsByChainMap = new Map(sendsByChain.rows.map((r) => [r.chain, r.count]));
     const depositsByChainMap = new Map(depositsByChain.rows.map((r) => [r.chain, r.count]));
+    const withdrawalsByChainMap = new Map(withdrawalsByChain.rows.map((r) => [r.chain, r.count]));
+    const crossChainByChainMap = new Map(crossChainByChain.rows.map((r) => [r.chain, r.count]));
     const sentVolumeByChainMap = new Map(volumeSentByChain.rows.map((r) => [r.chain, r.total]));
     const depositedVolumeByChainMap = new Map(volumeDepositedByChain.rows.map((r) => [r.chain, r.total]));
-    const revenueByChainMap = new Map(revenueByChain.rows.map((r) => [r.chain, r.total]));
+    const withdrawnVolumeByChainMap = new Map(volumeWithdrawnByChain.rows.map((r) => [r.chain, r.total]));
+    const crossChainVolumeByChainMap = new Map(volumeCrossChainByChain.rows.map((r) => [r.chain, r.total]));
+
+    // Fee revenue is the SAME platform-revenue number regardless of which
+    // flow generated it — merged into one per-chain total (not a per-flow
+    // breakdown) to match revenue.byChain's existing "revenue by chain"
+    // framing, now actually including all three fee-charging flows
+    // instead of just sends.
+    const revenueByChainMap = new Map<string, number>();
+    for (const rows of [feesBySendChain.rows, feesByWithdrawalChain.rows, feesByCrossChainChain.rows]) {
+      for (const r of rows) {
+        revenueByChainMap.set(r.chain, (revenueByChainMap.get(r.chain) ?? 0) + Number(r.total));
+      }
+    }
 
     const byChain = [...chains].sort().map((chain) => ({
       chain,
       sends: sendsByChainMap.get(chain) ?? 0,
       deposits: depositsByChainMap.get(chain) ?? 0,
+      cryptoWithdrawals: withdrawalsByChainMap.get(chain) ?? 0,
+      crossChainSends: crossChainByChainMap.get(chain) ?? 0,
     }));
 
     const volumeByChain = [...chains].sort().map((chain) => ({
       chain,
       sentUsdc: formatAmount(String(sentVolumeByChainMap.get(chain) ?? "0")),
       depositedUsdc: formatAmount(String(depositedVolumeByChainMap.get(chain) ?? "0")),
+      withdrawnUsdc: formatAmount(String(withdrawnVolumeByChainMap.get(chain) ?? "0")),
+      crossChainSentUsdc: formatAmount(String(crossChainVolumeByChainMap.get(chain) ?? "0")),
     }));
 
+    // Unlike sends/deposits volume above (each a single SQL sum(), no JS
+    // arithmetic involved), combined fee revenue genuinely does add three
+    // already-aggregated totals in JS here — there's no ledger write or
+    // stored balance riding on this number, only an admin dashboard
+    // display value, so summing three small, already-rounded currency
+    // totals with Number() carries none of the precision risk
+    // formatAmount's own doc comment warns about for real money movement.
     const revenueChainBreakdown = [...revenueByChainMap.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([chain, total]) => ({ chain, feesUsdc: formatAmount(String(total)) }));
+    const totalFeesUsdc =
+      Number(totalSendFees.rows[0].total) + Number(totalWithdrawalFees.rows[0].total) + Number(totalCrossChainFees.rows[0].total);
 
     return {
       wallets: { totalCreated: walletsTotal.rows[0].count },
@@ -307,16 +433,24 @@ export const adminRepo = {
       transactions: {
         sends: { total: sendsTotal.rows[0].count, settled: sendsSettled.rows[0].count },
         deposits: { total: depositsTotal.rows[0].count, settled: depositsSettled.rows[0].count },
+        cryptoWithdrawals: { total: withdrawalsTotal.rows[0].count, settled: withdrawalsSettled.rows[0].count },
+        crossChainSends: { total: crossChainTotal.rows[0].count, settled: crossChainSettled.rows[0].count },
         byChain,
       },
       onChainVolume: {
         sentUsdc: formatAmount(String(totalSent.rows[0].total)),
         depositedUsdc: formatAmount(String(totalDeposited.rows[0].total)),
+        withdrawnUsdc: formatAmount(String(totalWithdrawn.rows[0].total)),
+        crossChainSentUsdc: formatAmount(String(totalCrossChainSent.rows[0].total)),
         byChain: volumeByChain,
       },
       revenue: {
-        totalFeesUsdc: formatAmount(String(totalFees.rows[0].total)),
+        totalFeesUsdc: formatAmount(String(totalFeesUsdc)),
         byChain: revenueChainBreakdown,
+      },
+      reserves: {
+        fullyReserved: treasurySnapshot.reconciliation.every((r) => r.status === "OK"),
+        breakdown: treasurySnapshot.reconciliation,
       },
     };
   },
@@ -330,7 +464,7 @@ export const adminRepo = {
   // range is present in the output, zero-filled, even with no activity —
   // charting libraries want a continuous series, not sparse points.
   async getTimeseries(days: number): Promise<AdminMetricsDay[]> {
-    const [sendsByDay, depositsByDay] = await Promise.all([
+    const [sendsByDay, depositsByDay, withdrawalsByDay, crossChainByDay] = await Promise.all([
       pool.query(
         `select date_trunc('day', created_at)::date as day,
                 count(*)::int as count,
@@ -350,10 +484,32 @@ export const adminRepo = {
          group by day`,
         [days],
       ),
+      pool.query(
+        `select date_trunc('day', created_at)::date as day,
+                count(*)::int as count,
+                coalesce(sum(amount_human), 0) as withdrawn_usdc,
+                coalesce(sum(fee_amount), 0) as fees_usdc
+         from crypto_withdrawals
+         where state = 'CONFIRMED' and created_at >= now() - ($1 || ' days')::interval
+         group by day`,
+        [days],
+      ),
+      pool.query(
+        `select date_trunc('day', created_at)::date as day,
+                count(*)::int as count,
+                coalesce(sum(amount_human), 0) as sent_usdc,
+                coalesce(sum(fee_amount), 0) as fees_usdc
+         from cross_chain_sends
+         where state = 'COMPLETE' and created_at >= now() - ($1 || ' days')::interval
+         group by day`,
+        [days],
+      ),
     ]);
 
     const sendsByDayMap = new Map(sendsByDay.rows.map((r) => [dayKey(r.day), r]));
     const depositsByDayMap = new Map(depositsByDay.rows.map((r) => [dayKey(r.day), r]));
+    const withdrawalsByDayMap = new Map(withdrawalsByDay.rows.map((r) => [dayKey(r.day), r]));
+    const crossChainByDayMap = new Map(crossChainByDay.rows.map((r) => [dayKey(r.day), r]));
 
     const result: AdminMetricsDay[] = [];
     for (let i = days - 1; i >= 0; i--) {
@@ -363,14 +519,27 @@ export const adminRepo = {
 
       const sendRow = sendsByDayMap.get(key);
       const depositRow = depositsByDayMap.get(key);
+      const withdrawalRow = withdrawalsByDayMap.get(key);
+      const crossChainRow = crossChainByDayMap.get(key);
+
+      // JS-summed across three already-per-day-aggregated SQL totals —
+      // same "display value, not a ledger write" reasoning as
+      // getMetrics()'s own totalFeesUsdc; no precision risk that matters
+      // for a daily revenue chart.
+      const feesUsdc =
+        Number(sendRow?.fees_usdc ?? 0) + Number(withdrawalRow?.fees_usdc ?? 0) + Number(crossChainRow?.fees_usdc ?? 0);
 
       result.push({
         date: key,
         sendsCount: sendRow?.count ?? 0,
         depositsCount: depositRow?.count ?? 0,
+        cryptoWithdrawalsCount: withdrawalRow?.count ?? 0,
+        crossChainSendsCount: crossChainRow?.count ?? 0,
         sentUsdc: formatAmount(String(sendRow?.sent_usdc ?? "0")),
         depositedUsdc: formatAmount(String(depositRow?.deposited_usdc ?? "0")),
-        feesUsdc: formatAmount(String(sendRow?.fees_usdc ?? "0")),
+        withdrawnUsdc: formatAmount(String(withdrawalRow?.withdrawn_usdc ?? "0")),
+        crossChainSentUsdc: formatAmount(String(crossChainRow?.sent_usdc ?? "0")),
+        feesUsdc: formatAmount(String(feesUsdc)),
       });
     }
     return result;

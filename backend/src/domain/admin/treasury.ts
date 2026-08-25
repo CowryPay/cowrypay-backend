@@ -141,6 +141,59 @@ export interface TreasurySnapshot {
   // payout wallet can't actually cover yet (normal in the moment sweeping/
   // liquidity lags a deposit, a genuine problem if it persists).
   totalLedgerLiability: Record<string, Record<string, string>>;
+  // The actual comparison operational/totalLedgerLiability above only set
+  // up — computed here instead of left for whoever reads the JSON to work
+  // out by hand. This is the proof-of-reserves-style check: per chain and
+  // token, does the shared operational wallet actually hold at least as
+  // much as the ledger says users are owed, right now, verified against a
+  // live on-chain read rather than trusted from internal bookkeeping
+  // alone. reserveMonitor.ts alerts on this; GET /admin/treasury (this
+  // snapshot) is what a diligence conversation can point an investor at.
+  reconciliation: ReconciliationRow[];
+}
+
+export interface ReconciliationRow {
+  chain: string;
+  tokenSymbol: string;
+  ledgerLiability: string;
+  // null only when the operational wallet's on-chain balance couldn't be
+  // read at all (RPC failure, missing address) — distinct from a
+  // successful read of "0", which is a real (and real bad) shortfall.
+  onChainBalance: string | null;
+  deltaUsdc: string | null;
+  status: "OK" | "SHORTFALL" | "UNKNOWN";
+}
+
+// Pure display/alerting arithmetic, not a ledger write — nothing here
+// updates a stored balance, so the Number() round-trip formatAmount's own
+// doc comment warns against for real money movement doesn't apply the
+// same way; a monitoring value being off by a fraction of a cent doesn't
+// risk double-crediting or double-debiting anything.
+function computeReconciliation(
+  operational: WalletBalance[],
+  totalLedgerLiability: Record<string, Record<string, string>>,
+): ReconciliationRow[] {
+  const rows: ReconciliationRow[] = [];
+  for (const [tokenSymbol, byChain] of Object.entries(totalLedgerLiability)) {
+    for (const [chain, ledgerLiability] of Object.entries(byChain)) {
+      const wallet = operational.find((w) => w.chain === chain);
+      const onChainBalance = wallet?.error ? null : (wallet?.tokens?.[tokenSymbol] ?? null);
+      if (onChainBalance == null) {
+        rows.push({ chain, tokenSymbol, ledgerLiability, onChainBalance: null, deltaUsdc: null, status: "UNKNOWN" });
+        continue;
+      }
+      const delta = Number(onChainBalance) - Number(ledgerLiability);
+      rows.push({
+        chain,
+        tokenSymbol,
+        ledgerLiability,
+        onChainBalance,
+        deltaUsdc: String(delta),
+        status: delta >= 0 ? "OK" : "SHORTFALL",
+      });
+    }
+  }
+  return rows.sort((a, b) => a.chain.localeCompare(b.chain) || a.tokenSymbol.localeCompare(b.tokenSymbol));
 }
 
 // The only two tokens the platform tracks anywhere — not derived from
@@ -190,6 +243,7 @@ export async function getTreasurySnapshot(): Promise<TreasurySnapshot> {
     LEDGER_TOKENS.map(async (token) => [token, await ledgerRepo.getTotalAvailableByChain(token)] as const),
   );
   const totalLedgerLiability = Object.fromEntries(liabilityEntries);
+  const reconciliation = computeReconciliation(operational, totalLedgerLiability);
 
-  return { feeTreasury, operational, totalLedgerLiability };
+  return { feeTreasury, operational, totalLedgerLiability, reconciliation };
 }
