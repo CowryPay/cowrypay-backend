@@ -9,6 +9,7 @@ import { sendsRepo } from "../domain/offramp/repository.js";
 import { withTransaction } from "../db/pool.js";
 import type { SendState } from "../types.js";
 import { stellarWalletAdapter } from "../domain/wallets/stellarAdapter.js";
+import { sendNativeToken } from "../domain/wallets/awsKmsAdapter.js";
 import { getTreasurySnapshot } from "../domain/admin/treasury.js";
 import { diagnoseStellarDeposits } from "../domain/admin/stellarDepositDiagnostic.js";
 import { ledgerRepo } from "../domain/ledger/repository.js";
@@ -47,6 +48,16 @@ adminRouter.get("/admin/metrics/timeseries", async (req: Request, res: Response)
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
   const timeseries = await adminRepo.getTimeseries(days);
   res.json({ days, timeseries });
+});
+
+// One-off export for ops use (product-update / feedback-request emails,
+// etc.) — full admin key, not the metrics-scoped one, since PII (real
+// user emails) is more sensitive than the aggregate numbers everything
+// else on that key exposes.
+adminRouter.get("/admin/users/emails", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const users = await adminRepo.listUserEmails();
+  res.json({ count: users.length, users });
 });
 
 // Live on-chain balances, not anything derived from our own DB — two
@@ -338,6 +349,39 @@ adminRouter.post("/admin/stellar/treasury-transfer", async (req: Request, res: R
       reference: parsed.data.reference,
     });
     res.json({ ok: true, txHash: result.txHash, status: result.status });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+const EvmNativeTransferSchema = z.object({
+  chain: z.string().min(1),
+  toAddress: z.string().min(1),
+  amount: z.string().min(1),
+  note: z.string().min(1),
+  actor: z.string().min(1),
+});
+
+// EVM equivalent of /admin/stellar/treasury-transfer above, for the
+// payout wallet's own native gas token (CELO/ETH) rather than USDC/USDT —
+// e.g. topping up gas on another wallet the operator controls. Goes
+// through sendNativeToken (awsKmsAdapter.ts), which uses the exact same
+// nonce-claiming path and cross-process advisory lock as every real
+// payout from this wallet, for the same race-safety reason the Stellar
+// version's own comment explains.
+adminRouter.post("/admin/evm/native-transfer", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = EvmNativeTransferSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return;
+  }
+
+  const { chain, toAddress, amount, note, actor } = parsed.data;
+  console.log(`[admin] EVM native transfer: ${amount} native token on ${chain} to ${toAddress} — actor=${actor}, note="${note}"`);
+  try {
+    const txHash = await sendNativeToken(chain, toAddress as `0x${string}`, amount);
+    res.json({ ok: true, txHash });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

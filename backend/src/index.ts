@@ -35,6 +35,7 @@ import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
 import { cryptoWithdrawalsRouter } from "./routes/cryptoWithdrawals.js";
 import { crossChainSendsRouter } from "./routes/crossChainSends.js";
+import { campaignsRouter } from "./routes/campaigns.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
 import { startPaycrestSettlementPoller } from "./domain/offramp/paycrestSettlementPoller.js";
 import { startQuidaxSettlementPoller } from "./domain/offramp/quidaxSettlementPoller.js";
@@ -89,6 +90,7 @@ app.use(solanaWebhookRouter);
 app.use(adminRouter);
 app.use(cryptoWithdrawalsRouter);
 app.use(crossChainSendsRouter);
+app.use(campaignsRouter);
 
 // Last-resort catch-all — every route above already handles its OWN
 // expected failures (validation, insufficient balance, etc.) with a clear
