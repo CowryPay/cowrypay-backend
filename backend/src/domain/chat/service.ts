@@ -2,6 +2,7 @@ import { env } from "../../config/env.js";
 import { depositsRepo } from "../deposits/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { sendsRepo } from "../offramp/repository.js";
+import { crossChainSendsRepo } from "../crossChainSend/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { ensureStellarWallet, ensureSolanaWallet } from "../users/service.js";
 import { ensureSolanaUsdtAta } from "../wallets/solanaAdapter.js";
@@ -170,11 +171,12 @@ export async function handleChatMessage(userId: string, message: string): Promis
 
   if (intent === "txHistory") {
     await touchSession(userId);
-    const [sends, deposits] = await Promise.all([
+    const [sends, deposits, crossChainSends] = await Promise.all([
       sendsRepo.getForUser(userId, 5),
       depositsRepo.getForUser(userId, 5),
+      crossChainSendsRepo.getForUser(userId, 5),
     ]);
-    return { reply: buildTxHistoryMessage(sends, deposits) };
+    return { reply: buildTxHistoryMessage(sends, deposits, crossChainSends) };
   }
 
   if (intent === "chains") {
@@ -266,11 +268,12 @@ export async function handleChatMessage(userId: string, message: string): Promis
       return { reply: buildBalanceMessage(balances) };
     }
     if (parsed.action === "TX_HISTORY") {
-      const [sends, deposits] = await Promise.all([
+      const [sends, deposits, crossChainSends] = await Promise.all([
         sendsRepo.getForUser(userId, 5),
         depositsRepo.getForUser(userId, 5),
+        crossChainSendsRepo.getForUser(userId, 5),
       ]);
-      return { reply: buildTxHistoryMessage(sends, deposits) };
+      return { reply: buildTxHistoryMessage(sends, deposits, crossChainSends) };
     }
     if (parsed.action === "HELP") {
       return { reply: buildHelpMessage() };

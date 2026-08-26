@@ -1,4 +1,4 @@
-import type { Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
+import type { CrossChainSend, CrossChainSendState, Deposit, DepositState, LedgerBalance, Send, SendState, Wallet } from "../../types.js";
 import { formatAmount } from "../../utils/format.js";
 import { DEPOSIT_CHAINS } from "./intent.js";
 import { ALL_CROSS_CHAIN_SEND_CHAINS } from "../../domain/chat/crossChainSendDraft.js";
@@ -195,8 +195,8 @@ export function buildHelpMessage(): string {
   ].join("\n");
 }
 
-export function buildTxHistoryMessage(sends: Send[], deposits: Deposit[]): string {
-  if (sends.length === 0 && deposits.length === 0) {
+export function buildTxHistoryMessage(sends: Send[], deposits: Deposit[], crossChainSends: CrossChainSend[] = []): string {
+  if (sends.length === 0 && deposits.length === 0 && crossChainSends.length === 0) {
     return `No activity yet — send USDC to your deposit address, or try "send $50 to a bank account in Nigeria".`;
   }
 
@@ -208,8 +208,12 @@ export function buildTxHistoryMessage(sends: Send[], deposits: Deposit[]): strin
     createdAt: d.createdAt,
     text: `• Received ${formatAmount(d.amount)} ${d.tokenSymbol} — ${describeDepositState(d.state)}`,
   }));
+  const crossChainSendLines = crossChainSends.map((c) => ({
+    createdAt: c.createdAt,
+    text: `• Moved ${formatAmount(c.amountHuman)} ${c.tokenSymbol} ${capitalize(c.sourceChain)} → ${capitalize(c.destinationChain)} — ${describeCrossChainSendState(c.state)}`,
+  }));
 
-  const lines = [...sendLines, ...depositLines]
+  const lines = [...sendLines, ...depositLines, ...crossChainSendLines]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .map((l) => l.text);
 
@@ -225,6 +229,21 @@ function describeSendState(state: SendState): string {
     case "SEND_REJECTED":
     case "FAILED":
       return "failed";
+    case "REFUNDED":
+      return "refunded";
+    default:
+      return "processing";
+  }
+}
+
+function describeCrossChainSendState(state: CrossChainSendState): string {
+  switch (state) {
+    case "COMPLETE":
+      return "delivered ✅";
+    case "FAILED":
+      return "failed";
+    case "STUCK":
+      return "needs a manual check";
     case "REFUNDED":
       return "refunded";
     default:
