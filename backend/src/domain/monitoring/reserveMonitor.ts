@@ -30,10 +30,11 @@ export async function runReserveCheck(): Promise<void> {
   for (const r of recovered) currentlyBreached.delete(keyFor(r));
 
   if (newlyBreached.length > 0) {
-    const lines = newlyBreached.map(
-      (r) => `⚠️ <b>${r.chain} ${r.tokenSymbol}</b>: owe ${r.ledgerLiability}, hold ${r.onChainBalance} (short ${r.deltaUsdc})`,
-    );
-    await sendTelegramOpsAlert(`<b>CowryPay reserve shortfall</b>\n\n${lines.join("\n")}`);
+    const lines = newlyBreached.map((r) => {
+      const base = `⚠️ <b>${r.chain} ${r.tokenSymbol}</b>: owe ${r.ledgerLiability}, hold ${r.onChainBalance} (short ${r.deltaUsdc})`;
+      return r.note ? `${base}\n<i>${r.note}</i>` : base;
+    });
+    await sendTelegramOpsAlert(`<b>CowryPay reserve shortfall</b>\n\n${lines.join("\n\n")}`);
   }
   if (recovered.length > 0) {
     const lines = recovered.map((r) => `✅ <b>${r.chain} ${r.tokenSymbol}</b>: back to fully covered`);

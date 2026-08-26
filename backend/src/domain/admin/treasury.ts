@@ -162,7 +162,36 @@ export interface ReconciliationRow {
   onChainBalance: string | null;
   deltaUsdc: string | null;
   status: "OK" | "SHORTFALL" | "UNKNOWN";
+  // Set only when part (or all) of this row's delta is already traced to
+  // a specific, investigated, formally-accepted write-off — see
+  // KNOWN_WRITE_OFFS below. Deliberately does NOT change deltaUsdc/status:
+  // the reserve check's whole value is an honest, unadjusted on-chain vs
+  // ledger comparison, not one that quietly nets out accepted losses. This
+  // just saves a future reader from re-investigating a gap someone
+  // already ran to ground.
+  note: string | null;
 }
+
+// Real, already-investigated permanent losses — each entry traced to a
+// specific send's own audit trail (GET /admin/sends/:id) before being
+// added here, never a guess. Small and hardcoded deliberately: as of
+// 2026-08-26 there are exactly two of these across the platform's whole
+// history, so a DB table would be more machinery than the problem needs;
+// revisit that if this list ever stops being small.
+const KNOWN_WRITE_OFFS: Array<{ chain: string; tokenSymbol: string; note: string }> = [
+  {
+    chain: "base",
+    tokenSymbol: "USDC",
+    note:
+      "Includes a documented 0.99 USDC write-off (send 810f37d3-7059-47b2-a5d5-60a274acfe7b): a Centiiv order had no UGX payout rail, our payout genuinely broadcast and landed at Centiiv's temp wallet, which then moved the funds to an address outside our control. Never recovered — business decision was to absorb it, not chase recovery, and not credit the user (they were not credited).",
+  },
+  {
+    chain: "celo",
+    tokenSymbol: "USDC",
+    note:
+      "Includes a documented ~9.85 USDC discrepancy (send 70d26246-bc97-4c53-91f4-9cd7b92374c7): Paycrest reported an order refunded and it was auto-credited to the user per the normal flow, but no matching on-chain refund was found arriving at our registered treasury. Operator confirmed on 2026-08-26 that Paycrest returned the funds via a separate channel/arrangement.",
+  },
+];
 
 // Pure display/alerting arithmetic, not a ledger write — nothing here
 // updates a stored balance, so the Number() round-trip formatAmount's own
@@ -178,8 +207,9 @@ function computeReconciliation(
     for (const [chain, ledgerLiability] of Object.entries(byChain)) {
       const wallet = operational.find((w) => w.chain === chain);
       const onChainBalance = wallet?.error ? null : (wallet?.tokens?.[tokenSymbol] ?? null);
+      const knownWriteOff = KNOWN_WRITE_OFFS.find((w) => w.chain === chain && w.tokenSymbol === tokenSymbol)?.note ?? null;
       if (onChainBalance == null) {
-        rows.push({ chain, tokenSymbol, ledgerLiability, onChainBalance: null, deltaUsdc: null, status: "UNKNOWN" });
+        rows.push({ chain, tokenSymbol, ledgerLiability, onChainBalance: null, deltaUsdc: null, status: "UNKNOWN", note: knownWriteOff });
         continue;
       }
       const delta = Number(onChainBalance) - Number(ledgerLiability);
@@ -190,6 +220,7 @@ function computeReconciliation(
         onChainBalance,
         deltaUsdc: String(delta),
         status: delta >= 0 ? "OK" : "SHORTFALL",
+        note: knownWriteOff,
       });
     }
   }
