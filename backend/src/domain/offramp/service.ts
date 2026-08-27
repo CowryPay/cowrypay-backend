@@ -21,6 +21,7 @@ import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
 import { parseUnits } from "viem";
+import { sanitizeForDb } from "../../utils/format.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -401,12 +402,16 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
       // can differ when a locked order's own stored amount overrode it.
       await ledgerRepo.creditAvailable(client, userId, tokenSymbol, chain, amount);
       await sendsRepo.updateState(client, updated.id, { state: "FAILED" });
+      // sanitizeForDb strips a raw NUL byte an error message can carry —
+      // without it this logTransition call itself throws ("invalid byte
+      // sequence for encoding UTF8: 0x00"), masking the real failure. See
+      // utils/format.ts's own comment.
       await sendsRepo.logTransition(
         client,
         updated.id,
         "ORDER_CREATED",
         "FAILED",
-        `blockradar_withdraw_failed: ${err instanceof Error ? err.message : String(err)}`,
+        `blockradar_withdraw_failed: ${sanitizeForDb(err instanceof Error ? err.message : String(err))}`,
       );
     });
     // PayoutLiquidityError's message is already clean and accurate (our
@@ -525,7 +530,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
           final.id,
           "PAYOUT_INITIATED",
           "PAYOUT_INITIATED",
-          `fee_sweep_failed: ${err instanceof Error ? err.message : String(err)}`,
+          `fee_sweep_failed: ${sanitizeForDb(err instanceof Error ? err.message : String(err))}`,
         ),
       );
     }

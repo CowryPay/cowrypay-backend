@@ -16,6 +16,7 @@ import { computeCryptoWithdrawalFeeSplit, requireTreasuryAddress } from "../offr
 import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
+import { sanitizeForDb } from "../../utils/format.js";
 
 export interface InitiateCryptoWithdrawalInput {
   chain: string;
@@ -205,7 +206,7 @@ export async function initiateCryptoWithdrawal(
         withdrawal.id,
         "PENDING",
         "FAILED",
-        `withdraw_failed: ${err instanceof Error ? err.message : String(err)}`,
+        `withdraw_failed: ${sanitizeForDb(err instanceof Error ? err.message : String(err))}`,
       );
     });
     // PayoutLiquidityError's message is already clean and user-facing
@@ -271,7 +272,7 @@ export async function initiateCryptoWithdrawal(
           result.id,
           nextState,
           nextState,
-          `fee_sweep_failed: ${err instanceof Error ? err.message : String(err)}`,
+          `fee_sweep_failed: ${sanitizeForDb(err instanceof Error ? err.message : String(err))}`,
         ),
       );
     }
