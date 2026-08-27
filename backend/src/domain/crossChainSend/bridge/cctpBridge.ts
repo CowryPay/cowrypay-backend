@@ -274,12 +274,13 @@ export async function initiateCctpBurn(input: BridgeInitiateInput): Promise<Brid
     destination,
     amount: amountBaseUnits,
     token: "USDC",
-    // Deliberately SLOW (standard, hard-finality), not the SDK's own FAST
-    // default — matches this feature's original conservative choice; FAST
-    // trades a small protocol fee (1-14bps) for speed and relies on
-    // Circle's soft-finality confirmation instead of full finality. Easy
-    // one-line change if that trade-off is ever wanted.
-    config: { transferSpeed: "SLOW" },
+    // FAST, not the original conservative SLOW (hard-finality) choice —
+    // verified live against Circle's real fee docs: Base's Fast Transfer
+    // fee is 1.3bps (0.013%, ~$0.13 per $1,000), deducted from the minted
+    // amount at destination, for 8-20s finality instead of SLOW's ~15-20
+    // minute wait. Explicit product decision (2026-08-27) to trade that
+    // negligible fee for a ~50-100x speedup.
+    config: { transferSpeed: "FAST" },
   });
   const burnTxHash = await executePrepared(input.sourceChain, burnPrepared);
   if (!burnTxHash) throw new Error(`depositForBurn returned no transaction hash for ${input.sourceChain}`);
