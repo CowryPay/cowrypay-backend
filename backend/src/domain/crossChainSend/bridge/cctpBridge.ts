@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, type Chain } from "viem";
+import { createPublicClient, createWalletClient, http, parseUnits, type Chain } from "viem";
 import { createSolanaRpc } from "@solana/kit";
 import { ViemAdapter } from "@circle-fin/adapter-viem-v2";
 import { SolanaKitAdapter } from "@circle-fin/adapter-solana-kit";
@@ -228,16 +228,30 @@ async function executePrepared(chain: string, prepared: Prepared): Promise<strin
 // the bridge to complete — mirrors WalletAdapter.withdraw's broadcast-
 // and-return-immediately stance; checkCctpStatus below is what tracks
 // confirmation, phase by phase, on the poller's own schedule.
+// CCTP only ever moves USDC (token: "USDC" below, hardcoded), 6 decimals
+// on every chain this codebase touches — same constant every other USDC
+// amount conversion here already assumes (solanaAdapter.ts's
+// SOLANA_TOKEN_DECIMALS, chains.ts's per-chain token configs).
+const CCTP_USDC_DECIMALS = 6;
+
 export async function initiateCctpBurn(input: BridgeInitiateInput): Promise<BridgeInitiateResult> {
   const { source, destination } = await walletContexts(input.sourceChain, input.destinationChain, input.destinationAddress);
 
-  const approvePrepared = await provider.approve(source, input.amount);
+  // Real incident: input.amount is a human decimal string (e.g. "1.98") —
+  // the SDK's own docs show amount as a base-units integer string
+  // ("amount: '1000000', // 1 USDC"), and its internal BigInt(amount)
+  // call throws "Cannot convert 1.98 to a BigInt" on anything with a
+  // decimal point. liFiAdapter.ts already does this same parseUnits
+  // conversion for its own on-chain calls; this file never did.
+  const amountBaseUnits = parseUnits(input.amount, CCTP_USDC_DECIMALS).toString();
+
+  const approvePrepared = await provider.approve(source, amountBaseUnits);
   await executePrepared(input.sourceChain, approvePrepared);
 
   const burnPrepared = await provider.burn({
     source,
     destination,
-    amount: input.amount,
+    amount: amountBaseUnits,
     token: "USDC",
     // Deliberately SLOW (standard, hard-finality), not the SDK's own FAST
     // default — matches this feature's original conservative choice; FAST
