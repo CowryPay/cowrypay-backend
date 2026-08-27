@@ -9,7 +9,7 @@ import { getChainConfig } from "../../wallets/chains.js";
 import { getWalletAddress, kmsAccountFromKey } from "../../wallets/awsKmsAdapter.js";
 import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "../../wallets/evmNonce.js";
 import { getSolanaTreasurySigner } from "../../wallets/solanaKms.js";
-import { getChainDefinition } from "./chainDefinitions.js";
+import { CHAIN_DEFINITIONS, getChainDefinition } from "./chainDefinitions.js";
 import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult } from "./adapter.js";
 
 // Built on Circle's own official CCTP v2 SDK (provider-cctp-v2 +
@@ -35,6 +35,22 @@ import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult 
 // of hand-rolled ones.
 
 const EVM_CHAINS_HERE = new Set(["base", "optimism"]);
+
+// Real incident: an SDK update started enforcing at runtime what the type
+// (readonly ChainDefinition[]) always implied but never checked —
+// "Invalid AdapterCapabilities: supportedChains cannot be empty." The []
+// below was deliberate at the time (see each adapter's own comment on
+// why cctpAdapter.ts's own pairs logic, not this file, should scope
+// what's offered) but the SDK no longer accepts an empty array at all,
+// regardless of who's meant to own the scoping decision. Populated from
+// chainDefinitions.ts's own registry — the single source of truth this
+// file already depends on elsewhere — split by adapter kind (EVM vs
+// Solana), not the full registry for both, since an adapter declaring a
+// chain it can't actually sign for would be a lie the SDK might act on.
+const EVM_CHAIN_DEFINITIONS = [CHAIN_DEFINITIONS.base, CHAIN_DEFINITIONS.optimism].filter(
+  (def): def is NonNullable<typeof def> => def != null,
+);
+const SOLANA_CHAIN_DEFINITIONS = [CHAIN_DEFINITIONS.solana].filter((def): def is NonNullable<typeof def> => def != null);
 
 // ViemAdapter's getPublicClient/getWalletClient callbacks hand back a
 // genuine viem Chain (not Circle's own ChainDefinition — confirmed by
@@ -69,10 +85,7 @@ async function getViemAdapter(): Promise<ViemAdapter> {
         return createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
       },
     },
-    // supportedChains left empty deliberately — cctpAdapter.ts's own
-    // supported-pairs logic is what actually scopes which chains this
-    // feature offers; this adapter itself has no business re-deciding that.
-    { addressContext: "developer-controlled", supportedChains: [] },
+    { addressContext: "developer-controlled", supportedChains: EVM_CHAIN_DEFINITIONS },
   );
   return cachedViemAdapter;
 }
@@ -96,7 +109,7 @@ async function getSolanaAdapter(): Promise<SolanaKitAdapter> {
       getRpc: () => rpc,
       getSigner: () => getSolanaTreasurySigner(),
     },
-    { addressContext: "developer-controlled", supportedChains: [] },
+    { addressContext: "developer-controlled", supportedChains: SOLANA_CHAIN_DEFINITIONS },
   );
   return cachedSolanaAdapter;
 }
