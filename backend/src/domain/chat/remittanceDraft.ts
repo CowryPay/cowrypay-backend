@@ -461,9 +461,41 @@ export async function resolveRemittanceIntent(
   if (intent.recipientNickname) {
     const saved = await recipientsRepo.findByNickname(userId, intent.recipientNickname);
     if (saved) {
+      // saved.institution can be coded in a DIFFERENT provider's namespace
+      // than Paycrest's — real bug found live (2026-08-27): a recipient
+      // saved while a Centiiv order won the rate stores Centiiv's code
+      // ("100004" for OPay), not Paycrest's ("OPAYNGPC"). Every downstream
+      // assumption in this function (see the "Quidax is only ever used
+      // here..." comment below) requires recipient.institution to already
+      // be a valid Paycrest code — true for a freshly-resolved recipient
+      // (matched against Paycrest's own list), but never re-checked for a
+      // saved one, so a stale cross-provider code sailed straight into a
+      // Paycrest order and got rejected with "institution is not
+      // supported". Re-resolving here, by name, against Paycrest's live
+      // list — same fuzzy matcher already used everywhere else — self-
+      // heals it before it ever reaches an order. Falls back to the
+      // stored code on any lookup failure or ambiguous/zero match, so
+      // this can only improve on the status quo, never block a send that
+      // already worked.
+      let institution = saved.institution;
+      let institutionName = saved.institutionName;
+      try {
+        const paycrestInstitutions = await getInstitutions(saved.fiatCurrency);
+        const matches = findInstitutionMatches(saved.institutionName, paycrestInstitutions);
+        if (matches.length === 1) {
+          institution = matches[0]!.code;
+          institutionName = matches[0]!.name;
+        } else {
+          console.log(
+            `[remittance-draft] saved recipient "${saved.nickname}" institution "${saved.institutionName}" (code ${saved.institution}) found ${matches.length} matches on Paycrest's ${saved.fiatCurrency} list (need exactly 1) — using the stored code as-is.`,
+          );
+        }
+      } catch (err) {
+        console.error(`[remittance-draft] failed to re-validate saved recipient "${saved.nickname}" against Paycrest's institution list:`, err);
+      }
       const recipient: SendRecipient = {
-        institution: saved.institution,
-        institutionName: saved.institutionName,
+        institution,
+        institutionName,
         accountIdentifier: saved.accountIdentifier,
         accountName: saved.accountName,
         memo: saved.nickname,
