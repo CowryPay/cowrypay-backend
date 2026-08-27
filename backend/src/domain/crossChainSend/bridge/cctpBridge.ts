@@ -85,7 +85,22 @@ async function getViemAdapter(): Promise<ViemAdapter> {
         return createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
       },
     },
-    { addressContext: "developer-controlled", supportedChains: EVM_CHAIN_DEFINITIONS },
+    // Real incident: "developer-controlled" was wrong from the start —
+    // read the compiled SDK source (index.mjs's resolveEffectiveAccount)
+    // and confirmed it forces every send through a {type: 'json-rpc'}
+    // account, meaning the SDK asks the TRANSPORT itself to sign via
+    // eth_sendTransaction — a mode built for remote custody APIs
+    // (Fireblocks, Circle Wallets) that intercept that RPC method and
+    // sign server-side. A plain RPC provider (Alchemy) has no such
+    // capability and correctly rejects it outright. Our own account is a
+    // real local viem Account (kmsAccountFromKey, KMS-backed but signs
+    // locally via signTransaction) going through a standard RPC — exactly
+    // what the SDK's own validation message calls out as needing
+    // "user-controlled" ("browser wallets, private keys, or hardware
+    // wallets"). Safe to switch: our own walletContexts() already passes
+    // an explicit address on every WalletContext, so this mode's
+    // getAddress-resolution fallback is never actually needed.
+    { addressContext: "user-controlled", supportedChains: EVM_CHAIN_DEFINITIONS },
   );
   return cachedViemAdapter;
 }
@@ -109,7 +124,13 @@ async function getSolanaAdapter(): Promise<SolanaKitAdapter> {
       getRpc: () => rpc,
       getSigner: () => getSolanaTreasurySigner(),
     },
-    { addressContext: "developer-controlled", supportedChains: SOLANA_CHAIN_DEFINITIONS },
+    // Same correction as getViemAdapter's own — "user-controlled" is the
+    // right mode for a real local signer (getSolanaTreasurySigner), not
+    // a remote custody API. Solana doesn't have an eth_sendTransaction-
+    // style failure mode (its signer always signs locally regardless),
+    // but the address-resolution behavior still matches what
+    // "developer-controlled" was never really meant for here.
+    { addressContext: "user-controlled", supportedChains: SOLANA_CHAIN_DEFINITIONS },
   );
   return cachedSolanaAdapter;
 }
