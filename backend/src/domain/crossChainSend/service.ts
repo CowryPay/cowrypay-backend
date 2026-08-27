@@ -259,18 +259,42 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   // "user's payout already succeeded, a failure here only means the
   // platform fee didn't reach treasury this time" stance as
   // initiateCryptoWithdrawal's own fee sweep. Logged for manual
-  // reconciliation, not thrown.
+  // reconciliation, not thrown. Unlike offramp/service.ts and
+  // initiateCryptoWithdrawal's own fee sweeps, this previously logged
+  // nothing to the send's own audit trail on either outcome — verified
+  // live (2026-08-26) that both real fee sweeps to date actually landed
+  // on-chain, but that took a manual on-chain trace, not anything visible
+  // on the send record itself. Now logs a same-state transition on both
+  // outcomes, mirroring those two flows exactly.
   if (Number(feeAmount) > 0) {
     try {
-      await getWalletAdapter(input.sourceChain, wallet.provider).withdraw({
+      const feeSweep = await getWalletAdapter(input.sourceChain, wallet.provider).withdraw({
         chain: input.sourceChain,
         tokenSymbol,
         toAddress: treasuryAddress,
         amount: feeAmount,
         reference: `${reference}-fee`,
       });
+      await withTransaction((client) =>
+        crossChainSendsRepo.logTransition(
+          client,
+          result.id,
+          result.state,
+          result.state,
+          feeSweep.txHash ? `fee_swept:${feeSweep.txHash}` : "fee_swept_pending_screening",
+        ),
+      );
     } catch (err) {
       console.error(`Fee sweep failed for cross-chain send ${result.id}:`, err);
+      await withTransaction((client) =>
+        crossChainSendsRepo.logTransition(
+          client,
+          result.id,
+          result.state,
+          result.state,
+          `fee_sweep_failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
     }
   }
 
