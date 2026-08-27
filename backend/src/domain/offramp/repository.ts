@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool.js";
 import type { Send, SendRecipient, SendState, SendStateTransition } from "../../types.js";
+import { sanitizeForPgText } from "../../utils/format.js";
 
 function mapSend(row: any): Send {
   return {
@@ -159,7 +160,7 @@ export const sendsRepo = {
     await client.query(
       `insert into send_state_transitions (send_id, from_state, to_state, trigger, actor)
        values ($1, $2, $3, $4, $5)`,
-      [sendId, fromState, toState, trigger, actor],
+      [sendId, fromState, toState, sanitizeForPgText(trigger), actor],
     );
   },
 
