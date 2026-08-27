@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool.js";
 import type { CrossChainSend, CrossChainSendState, CrossChainSendStateTransition } from "../../types.js";
-import { sanitizeForPgText } from "../../utils/format.js";
+import { sanitizeForDb } from "../../utils/format.js";
 
 function mapSend(row: any): CrossChainSend {
   return {
@@ -151,7 +151,7 @@ export const crossChainSendsRepo = {
     await client.query(
       `insert into cross_chain_send_state_transitions (cross_chain_send_id, from_state, to_state, trigger, actor)
        values ($1, $2, $3, $4, $5)`,
-      [crossChainSendId, fromState, toState, sanitizeForPgText(trigger), actor],
+      [crossChainSendId, fromState, toState, sanitizeForDb(trigger), actor],
     );
   },
 

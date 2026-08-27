@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool.js";
 import type { CryptoWithdrawal, CryptoWithdrawalState, CryptoWithdrawalStateTransition } from "../../types.js";
-import { sanitizeForPgText } from "../../utils/format.js";
+import { sanitizeForDb } from "../../utils/format.js";
 
 function mapWithdrawal(row: any): CryptoWithdrawal {
   return {
@@ -123,7 +123,7 @@ export const cryptoWithdrawalsRepo = {
     await client.query(
       `insert into crypto_withdrawal_state_transitions (crypto_withdrawal_id, from_state, to_state, trigger, actor)
        values ($1, $2, $3, $4, $5)`,
-      [cryptoWithdrawalId, fromState, toState, sanitizeForPgText(trigger), actor],
+      [cryptoWithdrawalId, fromState, toState, sanitizeForDb(trigger), actor],
     );
   },
 

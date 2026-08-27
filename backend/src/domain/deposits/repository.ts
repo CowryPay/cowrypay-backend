@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "../../db/pool.js";
 import type { Deposit, DepositState, DepositStateTransition } from "../../types.js";
-import { sanitizeForPgText } from "../../utils/format.js";
+import { sanitizeForDb } from "../../utils/format.js";
 
 function mapDeposit(row: any): Deposit {
   return {
@@ -124,7 +124,7 @@ export const depositsRepo = {
     await client.query(
       `insert into deposit_state_transitions (deposit_id, from_state, to_state, trigger, actor)
        values ($1, $2, $3, $4, $5)`,
-      [depositId, fromState, toState, sanitizeForPgText(trigger), actor],
+      [depositId, fromState, toState, sanitizeForDb(trigger), actor],
     );
   },
 

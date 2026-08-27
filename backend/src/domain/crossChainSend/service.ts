@@ -19,6 +19,7 @@ import { getSolanaMint, readSolanaTreasuryBalance, SOLANA_TOKEN_DECIMALS } from 
 import { sweepWallet as sweepSolanaWallet } from "../wallets/solanaDepositSweeper.js";
 import { getBridgeAdapter } from "./bridge/index.js";
 import { crossChainSendsRepo } from "./repository.js";
+import { sanitizeForDb } from "../../utils/format.js";
 
 export interface InitiateCrossChainSendInput {
   sourceChain: string;
@@ -219,23 +220,22 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
       reference,
     });
   } catch (err) {
+    // sanitizeForDb strips a raw NUL byte an error message can carry (seen
+    // live from a malformed on-chain revert-reason decode) — without it,
+    // THIS logTransition call itself throws ("invalid byte sequence for
+    // encoding UTF8: 0x00"), which replaces the real failure with a
+    // confusing, unrelated database error and never records the refund
+    // transition at all. See utils/format.ts's own comment.
+    const errorMessage = sanitizeForDb(err instanceof Error ? err.message : String(err));
     // Safe to refund — nothing irreversible happened on-chain yet (the
     // source leg never broadcast). See the poller's own comment for why
     // this is NOT safe once the source leg has confirmed.
     await withTransaction(async (client) => {
       await ledgerRepo.creditAvailable(client, userId, tokenSymbol, input.sourceChain, input.amount);
       await crossChainSendsRepo.updateState(client, send.id, "FAILED");
-      await crossChainSendsRepo.logTransition(
-        client,
-        send.id,
-        "PENDING",
-        "FAILED",
-        `bridge_initiate_failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      await crossChainSendsRepo.logTransition(client, send.id, "PENDING", "FAILED", `bridge_initiate_failed: ${errorMessage}`);
     });
-    throw new Error(
-      `Could not start the cross-chain transfer (${err instanceof Error ? err.message : String(err)}) — it was marked failed and your balance was refunded.`,
-    );
+    throw new Error(`Could not start the cross-chain transfer (${errorMessage}) — it was marked failed and your balance was refunded.`);
   }
 
   const result = await withTransaction(async (client) => {
