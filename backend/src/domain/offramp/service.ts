@@ -21,7 +21,7 @@ import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
 import { parseUnits } from "viem";
-import { sanitizeForDb } from "../../utils/format.js";
+import { sanitizeForDb, formatAmount } from "../../utils/format.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -541,7 +541,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const recipientLabel = input.recipient.institutionName ?? input.recipient.institution;
   const message = [
     `⏳ Your transaction with the following details is processing:`,
-    `💸 Sent ${amount} ${tokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
+    `💸 Sent ${formatAmount(amount)} ${tokenSymbol} on ${capitalize(chain)} — ${input.recipient.accountName} at ${recipientLabel}` +
       (fiatEstimate ? ` will receive ${input.fiatCurrency} ${fiatEstimate}` : ""),
     ``,
     `This usually completes within a few minutes — we'll update you once it's confirmed.`,
