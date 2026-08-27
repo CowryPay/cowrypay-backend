@@ -42,15 +42,33 @@ export type CrossChainSendResolution =
 // Mirrors cryptoWithdrawalDraft.ts's mergeCryptoWithdrawalDrafts — new
 // non-empty values win, missing ones fall back to what's already known
 // from an earlier message in the same multi-turn exchange.
+//
+// toAddress is the one field NOT carried forward unconditionally — real
+// incident this closes: a draft that never resolves (e.g. stuck retrying
+// a quote failure) can sit alive for days, since touchSession refreshes
+// the idle timer on ANY later message without clearing it. If a later,
+// unrelated request then names a genuinely different destinationChain
+// without repeating the address, blindly reusing the OLD address (meant
+// for a different chain) risks exactly the §9 "wrong destination is
+// unrecoverable" failure this whole flow exists to prevent — an EVM-to-
+// EVM chain change wouldn't even be caught by a format mismatch the way
+// this specific Solana case happened to be. Dropped (not carried over)
+// whenever destinationChainHint is both present and actually different
+// from what the stale draft had; a genuinely continuing conversation
+// (same chain, still filling in the address) is unaffected.
 export function mergeCrossChainSendDrafts(
   existing: CrossChainSendIntent,
   incoming: CrossChainSendIntent,
 ): CrossChainSendIntent {
+  const destinationChanged =
+    incoming.destinationChainHint != null &&
+    existing.destinationChainHint != null &&
+    incoming.destinationChainHint.toLowerCase() !== existing.destinationChainHint.toLowerCase();
   return {
     kind: "crossChainSend",
     action: "SEND_CROSS_CHAIN",
     amount: incoming.amount ?? existing.amount,
-    toAddress: incoming.toAddress ?? existing.toAddress,
+    toAddress: incoming.toAddress ?? (destinationChanged ? undefined : existing.toAddress),
     sourceChainHint: incoming.sourceChainHint ?? existing.sourceChainHint,
     destinationChainHint: incoming.destinationChainHint ?? existing.destinationChainHint,
     tokenHint: incoming.tokenHint ?? existing.tokenHint,

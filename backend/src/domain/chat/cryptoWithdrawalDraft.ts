@@ -33,15 +33,24 @@ export type CryptoWithdrawalResolution =
 // Mirrors remittanceDraft.ts's mergeRemittanceDrafts — new non-empty values
 // win, missing ones fall back to what's already known from an earlier
 // message in the same multi-turn exchange.
+// toAddress is NOT carried forward unconditionally when chainHint actually
+// changes — see crossChainSendDraft.ts's mergeCrossChainSendDrafts for the
+// full incident this closes. Worse here than there: every EVM chain shares
+// one address format, so a stale address surviving a chain-hint change
+// (e.g. a stuck draft from days ago meant for Base silently reused for a
+// new, unrelated Optimism withdrawal) would never get caught by a format
+// mismatch the way a cross-chain Solana address happened to be.
 export function mergeCryptoWithdrawalDrafts(
   existing: CryptoWithdrawalIntent,
   incoming: CryptoWithdrawalIntent,
 ): CryptoWithdrawalIntent {
+  const chainChanged =
+    incoming.chainHint != null && existing.chainHint != null && incoming.chainHint.toLowerCase() !== existing.chainHint.toLowerCase();
   return {
     kind: "cryptoWithdrawal",
     action: "WITHDRAW_TO_WALLET",
     amount: incoming.amount ?? existing.amount,
-    toAddress: incoming.toAddress ?? existing.toAddress,
+    toAddress: incoming.toAddress ?? (chainChanged ? undefined : existing.toAddress),
     chainHint: incoming.chainHint ?? existing.chainHint,
     tokenHint: incoming.tokenHint ?? existing.tokenHint,
   };

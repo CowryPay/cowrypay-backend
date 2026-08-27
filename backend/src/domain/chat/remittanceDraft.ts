@@ -74,7 +74,22 @@ export type RemittanceIntent = Extract<ParsedIntent, { kind: "remittance" }>;
 // Fills gaps in a newly-parsed message with whatever the prior draft already
 // had — new non-empty values win, missing ones fall back to what's already
 // known. Doesn't trust the LLM to always echo prior fields back itself.
+// accountIdentifier is NOT carried forward unconditionally when the
+// institution or country actually changes — same incident class as
+// crossChainSendDraft.ts's mergeCrossChainSendDrafts (see its own
+// comment): a draft stuck alive for days (touchSession refreshes the idle
+// timer on any later message without clearing an unresolved draft) could
+// otherwise silently reuse a bank account number meant for a different
+// institution/country once the user names a new one without repeating
+// the account number.
 export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: RemittanceIntent): RemittanceIntent {
+  const institutionChanged =
+    incoming.institutionHint != null &&
+    existing.institutionHint != null &&
+    incoming.institutionHint.toLowerCase() !== existing.institutionHint.toLowerCase();
+  const countryChanged =
+    incoming.countryHint != null && existing.countryHint != null && incoming.countryHint.toLowerCase() !== existing.countryHint.toLowerCase();
+  const contextChanged = institutionChanged || countryChanged;
   return {
     kind: "remittance",
     action: "SEND_REMITTANCE",
@@ -82,7 +97,7 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
     recipientNickname: incoming.recipientNickname ?? existing.recipientNickname,
     countryHint: incoming.countryHint ?? existing.countryHint,
     institutionHint: incoming.institutionHint ?? existing.institutionHint,
-    accountIdentifier: incoming.accountIdentifier ?? existing.accountIdentifier,
+    accountIdentifier: incoming.accountIdentifier ?? (contextChanged ? undefined : existing.accountIdentifier),
     chainHint: incoming.chainHint ?? existing.chainHint,
     tokenHint: incoming.tokenHint ?? existing.tokenHint,
   };
