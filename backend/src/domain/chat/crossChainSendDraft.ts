@@ -13,13 +13,21 @@ import type { ParsedIntent } from "./schemas.js";
 // pair (see crossChainSend/bridge/cctpAdapter.ts and liFiAdapter.ts's own
 // SUPPORTED_CHAINS sets — this list must stay in sync with those, since
 // this is what gates the chat flow before either adapter is even
-// consulted). Stellar isn't included since no viable native-USDC path has
-// been found for it yet through any bridge checked. Optimism isn't
-// included either, even though its CCTP/LI.FI signing paths both exist —
-// deposits on Optimism are on hold (DEPOSIT_CHAINS in
+// consulted). Optimism isn't included, even though its CCTP/LI.FI signing
+// paths both exist — deposits on Optimism are on hold (DEPOSIT_CHAINS in
 // ai-agent/chat/intent.ts), so no user can actually hold an Optimism
 // balance to send from yet. Re-add once Optimism deposits ship.
-export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana"];
+//
+// Stellar was added 2026-09-01 (hand-built Soroban CCTP integration, see
+// crossChainSend/bridge/stellarCctpAdapter.ts) — this list gates broadly
+// (which chains exist at all in this feature), NOT precisely which pair
+// directions work; stellarCctpAdapter's own supports() is the exact
+// authority there, and currently only allows Stellar as a DESTINATION
+// (Base/Optimism/Solana -> Stellar), never as a source yet. A user
+// picking "Stellar" as their source chain will cleanly fail at the
+// bridge.supports() check below with a real "not supported yet" message,
+// not silently do the wrong thing.
+export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana", "stellar"];
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);

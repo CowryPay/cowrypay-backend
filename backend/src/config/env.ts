@@ -167,6 +167,12 @@ export const env = {
   // lazily by that code, not here, same pattern as the vars above.
   stellarNetwork: process.env.STELLAR_NETWORK ?? "testnet",
   stellarHorizonUrl: process.env.STELLAR_HORIZON_URL ?? "https://horizon-testnet.stellar.org",
+  // Horizon (above) has no Soroban RPC methods — contract simulation,
+  // invocation, and Soroban-side account/ledger reads need this separate
+  // endpoint. Used by crossChainSend/bridge/stellarCctpSoroban.ts for the
+  // CCTP mint_and_forward/deposit_for_burn Soroban calls; nothing else in
+  // this codebase has ever needed Soroban before.
+  stellarSorobanRpcUrl: process.env.STELLAR_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
   stellarDepositAddress: process.env.STELLAR_DEPOSIT_ADDRESS,
   // Circle's USDC-on-Stellar issuer — re-verify against
   // developers.circle.com/stablecoins/quickstart-transfer-usdc-stellar

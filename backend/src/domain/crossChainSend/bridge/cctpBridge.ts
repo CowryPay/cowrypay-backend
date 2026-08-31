@@ -34,7 +34,7 @@ import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult 
 // flow here, just using Circle's verified step implementations instead
 // of hand-rolled ones.
 
-const EVM_CHAINS_HERE = new Set(["base", "optimism"]);
+export const EVM_CHAINS_HERE = new Set(["base", "optimism"]);
 
 // Real incident: an SDK update started enforcing at runtime what the type
 // (readonly ChainDefinition[]) always implied but never checked —
@@ -135,13 +135,21 @@ async function getSolanaAdapter(): Promise<SolanaKitAdapter> {
   return cachedSolanaAdapter;
 }
 
-type ChainAdapter = ViemAdapter | SolanaKitAdapter;
+export type ChainAdapter = ViemAdapter | SolanaKitAdapter;
 
-async function getAdapterForChain(chain: string): Promise<ChainAdapter> {
+// Exported for stellarCctpAdapter.ts's reuse — a Base/Optimism/Solana leg
+// of a Stellar-touching pair still signs/broadcasts through the exact
+// same adapters and nonce coordination as every other CCTP pair; only the
+// mintRecipient/hookData construction differs for a Stellar destination
+// (see that file's own comment on why), not the underlying signing
+// machinery. Pure export additions below (getAdapterForChain,
+// getSignerAddressForChain, withSharedNonce, executePrepared) — no
+// behavior changes to this file.
+export async function getAdapterForChain(chain: string): Promise<ChainAdapter> {
   return EVM_CHAINS_HERE.has(chain.toLowerCase()) ? getViemAdapter() : getSolanaAdapter();
 }
 
-async function getSignerAddressForChain(chain: string): Promise<string> {
+export async function getSignerAddressForChain(chain: string): Promise<string> {
   if (EVM_CHAINS_HERE.has(chain.toLowerCase())) {
     if (!env.awsKmsPayoutKeyArn) throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set to bridge via CCTP");
     return getWalletAddress(env.awsKmsPayoutKeyArn);
@@ -163,7 +171,7 @@ const provider = new CCTPV2BridgingProvider();
 // coordinated through the one shared in-process sequence. Solana has no
 // equivalent concept (transactions use a recent blockhash, handled
 // internally by the adapter) — only used for EVM legs, see executePrepared.
-async function withSharedNonce<T>(chain: string, run: (nonce: number) => Promise<T>): Promise<T> {
+export async function withSharedNonce<T>(chain: string, run: (nonce: number) => Promise<T>): Promise<T> {
   const { viemChain, rpcUrl } = getChainConfig(chain);
   const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn!);
   const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
@@ -230,8 +238,8 @@ async function walletContexts(sourceChain: string, destinationChain: string, des
 // is called directly; Noop means this step doesn't apply on this chain
 // (e.g. Solana has no ERC-20-style approve step) — nothing to broadcast,
 // returns null rather than a placeholder hash.
-type Prepared = Awaited<ReturnType<typeof provider.approve>>;
-async function executePrepared(chain: string, prepared: Prepared): Promise<string | null> {
+export type Prepared = Awaited<ReturnType<typeof provider.approve>>;
+export async function executePrepared(chain: string, prepared: Prepared): Promise<string | null> {
   if (prepared.type === "noop") return null;
   if (prepared.type === "evm") {
     return withSharedNonce(chain, (nonce) =>
@@ -309,7 +317,7 @@ interface CctpBridgeReference {
 // receiptStatus.ts) now that a leg can be Solana. Bounded to a short
 // per-tick timeout (not indefinite) so an unconfirmed tx reads as "still
 // pending" rather than blocking the poller.
-async function checkTxConfirmed(chain: string, txHash: string): Promise<"pending" | "success" | "reverted"> {
+export async function checkTxConfirmed(chain: string, txHash: string): Promise<"pending" | "success" | "reverted"> {
   const chainDef = getChainDefinition(chain);
   if (!chainDef) throw new Error(`${chain} has no CCTP chain definition registered`);
   const adapter = await getAdapterForChain(chain);
