@@ -89,7 +89,7 @@ export async function selectOfframpProvider(params: {
   if (!isTokenSupportedOnChain(params.chain, token)) {
     throw new Error(`${token} isn't supported on ${params.chain} yet.`);
   }
-  const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain)
+  const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain, params.fiatCurrency)
     ? getPaycrestRate({
         network: params.chain,
         token,

@@ -319,8 +319,8 @@ async function finalizeRemittanceDraft(
   // error, before the fallback-retry logic even got a chance to run
   // (that logic only handles the CHOSEN provider's order creation
   // failing, not "the default was never valid to begin with").
-  if (provider === "paycrest" && !isPaycrestEligible(chain)) {
-    console.log(`[remittance-draft] no eligible provider for ${chain} after selection — defaulted to paycrest, which isn't eligible.`);
+  if (provider === "paycrest" && !isPaycrestEligible(chain, fiatCurrency)) {
+    console.log(`[remittance-draft] no eligible provider for ${chain}/${fiatCurrency} after selection — defaulted to paycrest, which isn't eligible.`);
     return {
       ok: false,
       message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
@@ -358,7 +358,7 @@ async function finalizeRemittanceDraft(
     // hard "not supported" error, not a liquidity gap), so blindly
     // retrying there for e.g. a Stellar send just produced Paycrest's own
     // confusing raw validation error instead of an honest message.
-    if (provider !== "paycrest" && isPaycrestEligible(chain)) {
+    if (provider !== "paycrest" && isPaycrestEligible(chain, fiatCurrency)) {
       try {
         provider = "paycrest";
         finalRecipient = recipient; // undo the alt-provider-coded recipient, back to Paycrest's own coding

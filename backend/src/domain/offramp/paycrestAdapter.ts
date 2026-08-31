@@ -14,8 +14,23 @@ import { env } from "../../config/env.js";
 // of an honest "no provider available" message.
 const UNSUPPORTED_NETWORKS = new Set(["optimism", "solana", "stellar"]);
 
-export function isPaycrestEligible(chain: string): boolean {
-  return !UNSUPPORTED_NETWORKS.has(chain.toLowerCase());
+// Real gap found live (2026-08-31), same bug class already fixed for
+// Quidax/Centiiv (see their own SUPPORTED_FIAT_CURRENCIES comments) but
+// never applied here: this function only ever checked chain support,
+// never fiatCurrency, so a GHS-bound send on an eligible chain (e.g.
+// Base) was still treated as Paycrest-eligible and queried for a rate.
+// Verified live against docs.paycrest.io/resources/supported-currencies
+// AND a real GET /rates call (GHS cleanly rejected: "Fiat currency GHS
+// is not supported") — Paycrest's own rate endpoint does validate this
+// correctly, unlike Quidax/Centiiv's historical fake-rate behavior, so
+// the practical danger here was smaller (a wasted API call, not a wrong
+// provider winning the comparison), but the explicit gate is still the
+// right fix: consistent with the other two providers, and doesn't rely
+// on a downstream API happening to validate what this function should.
+const PAYCREST_SUPPORTED_FIAT_CURRENCIES = new Set(["NGN", "KES", "UGX", "TZS"]);
+
+export function isPaycrestEligible(chain: string, fiatCurrency: string): boolean {
+  return !UNSUPPORTED_NETWORKS.has(chain.toLowerCase()) && PAYCREST_SUPPORTED_FIAT_CURRENCIES.has(fiatCurrency.toUpperCase());
 }
 
 // Distinguished from a generic order-creation failure so callers can show a

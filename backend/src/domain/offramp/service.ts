@@ -274,7 +274,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // validation error instead of an honest one — callers are expected to
   // use GET /offramp/rate first to pick an eligible provider, but this is
   // the last line of defense if they don't.
-  if (!lockedPreview && provider === "paycrest" && !isPaycrestEligible(chain)) {
+  if (!lockedPreview && provider === "paycrest" && !isPaycrestEligible(chain, input.fiatCurrency)) {
     throw new Error(
       `Off-ramping from ${chain} isn't available via Paycrest — check GET /offramp/rate for which provider actually supports this chain.`,
     );
