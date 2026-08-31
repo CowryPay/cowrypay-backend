@@ -217,9 +217,24 @@ export async function resolveCrossChainSendIntent(
   const draft: CrossChainSendDraft = { amount: amountStr, toAddress: intent.toAddress, sourceChain, destinationChain, tokenSymbol };
   const etaMinutes = Math.max(1, Math.round(quote.estimatedSeconds / 60));
 
+  // Stellar-specific caveat: the mint lands via a Soroban contract call
+  // (mint_and_forward), not a classic `payment` operation. Any Stellar
+  // service that credits deposits by scanning for `payment` ops keyed to
+  // a memo — including this platform's own stellarDepositScanner.ts —
+  // will never see it, memo or no memo. That makes a shared/omnibus
+  // Stellar address (e.g. an exchange deposit address requiring a memo)
+  // unsafe as a destination even though its G... address looks like any
+  // other valid one; only a genuine individually-owned account is safe.
+  // This can't be detected from the address format alone, so it's a
+  // warning, not a hard block.
+  const stellarMemoWarning =
+    destinationChain === "stellar"
+      ? " Note: this only works for a genuine personal Stellar wallet address. Do NOT send to an exchange or platform deposit address that requires a memo — funds sent that way will not be credited."
+      : "";
+
   return {
     ok: true,
     draft,
-    summary: `Ready to send ${amountStr} ${tokenSymbol} from ${capitalize(sourceChain)} to ${intent.toAddress} on ${capitalize(destinationChain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive approximately ${quote.destinationAmount} ${tokenSymbol} (the exact amount can vary slightly on this route). Estimated time: ~${etaMinutes} minute${etaMinutes === 1 ? "" : "s"}. Double-check that address and chain carefully — crypto sent cross-chain to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to send ${amountStr} ${tokenSymbol} from ${capitalize(sourceChain)} to ${intent.toAddress} on ${capitalize(destinationChain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive approximately ${quote.destinationAmount} ${tokenSymbol} (the exact amount can vary slightly on this route). Estimated time: ~${etaMinutes} minute${etaMinutes === 1 ? "" : "s"}. Double-check that address and chain carefully — crypto sent cross-chain to the wrong address can't be recovered.${stellarMemoWarning} Confirm in the app to enter your PIN and complete it.`,
   };
 }
