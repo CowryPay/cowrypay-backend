@@ -37,11 +37,14 @@ export function getStellarCctpContracts() {
 // official one exists from Circle (confirmed: @circle-fin/bridge-kit
 // declares a Stellar chain constant in its TYPE definitions but it's not
 // exported at runtime, and even that aspirational declaration has
-// cctp: null). This is only ever passed as the `toChain` of a
-// depositForBurnWithHook action on the EVM/Solana source side — used
-// there purely to embed the correct destination domain (27) in the burn
-// message; we never route an actual mint through this object's own
-// adapter/contracts (Stellar's mint is hand-submitted separately via
+// cctp: null). Used as the `toChain` of a depositForBurnWithHook action on
+// the EVM/Solana source side (Base/Optimism/Solana -> Stellar) to embed the
+// correct destination domain (27) in the burn message, AND as the
+// `source.chain` of a stub WalletContext for provider.fetchAttestation()/
+// provider.mint() when Stellar is the SOURCE (Stellar -> Base/Solana) — see
+// stellarCctpAdapter.ts's Stellar-as-source checkStatus(). We never route an
+// actual mint/burn through this object's own adapter/contracts in either
+// direction (Stellar transactions are always hand-submitted separately via
 // submitStellarContractCall, not through this SDK at all).
 export function getStellarChainDefinition() {
   const contracts = getStellarCctpContracts();
@@ -54,7 +57,20 @@ export function getStellarChainDefinition() {
     explorerUrl: "https://stellar.expert/explorer/public/tx/{hash}",
     rpcEndpoints: [env.stellarHorizonUrl],
     eurcAddress: null,
-    usdcAddress: null,
+    // Real value, not null — required for Stellar to pass as a `source.chain`
+    // WalletContext: @circle-fin/provider-cctp-v2's assertCCTPv2WalletContext
+    // (traced in compiled source) hard-throws "Does not have USDC configured"
+    // when usdcAddress is null, and Stellar only becomes `source.chain` once
+    // it's used as the burn side (Stellar-as-source). Harmless for the
+    // existing toChain usage above — nothing reads .chain.usdcAddress on the
+    // destination side in any code path this codebase actually calls (the
+    // one function that does, assertCCTPv2AttestationParams, belongs to the
+    // SDK's own high-level orchestrator, which this codebase deliberately
+    // never uses — see the plan doc's useForwarder refutation). A Soroban
+    // contract strkey here matches how other non-EVM chains in the SDK's own
+    // table represent this field in their native format (Solana: base58
+    // mint address, Algorand: decimal asset ID) — not a new convention.
+    usdcAddress: getStellarUsdcContractId(),
     usdtAddress: null,
     cctp: {
       domain: STELLAR_CCTP_DOMAIN,

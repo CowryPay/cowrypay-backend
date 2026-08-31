@@ -1,6 +1,7 @@
 import { CCTPV2BridgingProvider } from "@circle-fin/provider-cctp-v2";
-import { parseUnits } from "viem";
+import { parseUnits, getAddress, hexToBytes } from "viem";
 import { Address as StellarAddress } from "@stellar/stellar-sdk";
+import { getAddressEncoder, getAddressDecoder, address as toSolanaAddress } from "@solana/kit";
 import { getChainDefinition } from "./chainDefinitions.js";
 import {
   getAdapterForChain,
@@ -12,12 +13,16 @@ import {
 import {
   getStellarCctpContracts,
   getStellarChainDefinition,
+  getStellarUsdcContractId,
   submitStellarContractCall,
   checkStellarTxStatus,
   addressToBytes32,
   buildStellarForwardHookData,
   nativeToScVal,
+  STELLAR_USDC_DECIMALS,
 } from "./stellarCctpSoroban.js";
+import { getStellarSigningKeypair } from "../../wallets/stellarKms.js";
+import { isValidAddressForChain } from "../../cryptoWithdrawals/addressValidation.js";
 import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult, BridgeQuote } from "./adapter.js";
 
 // Same USDC-is-always-6-decimals assumption cctpBridge.ts's own
@@ -25,32 +30,222 @@ import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePh
 // as a local copy rather than importing that unexported constant, since
 // it's a protocol fact (not configuration) safe to state twice. Stellar's
 // OWN side of the transfer uses 7 decimals — see stellarCctpSoroban.ts's
-// STELLAR_USDC_DECIMALS, used only once Phase B (Stellar as source) is
-// built; this file (Phase A, Stellar as destination) never burns on the
-// Stellar side, so it never needs that constant.
+// STELLAR_USDC_DECIMALS, imported above and used by the Stellar-as-source
+// (Step B) burn below.
 const EVM_SOLANA_USDC_DECIMALS = 6;
 
-// Phase A only: base/optimism/solana -> stellar. Phase B (stellar as
-// SOURCE) needs Soroban deposit_for_burn, not yet built — see the plan
-// doc's phasing. supports() must be the honest "can this actually go
-// through right now" answer, not just "is there data about this pair
-// somewhere" — same principle cctpAdapter.ts's own SUPPORTED_CHAINS
-// comment establishes elsewhere in this codebase.
+// Step A: base/optimism/solana -> stellar (Stellar as destination).
 const NON_STELLAR_SOURCE_CHAINS = new Set(["base", "optimism", "solana"]);
+
+// Step B: stellar -> base/solana only (Stellar as source) — matches
+// cctpAdapter.ts's own SUPPORTED_CHAINS for the plain-pair mint side this
+// reuses. Not optimism (not in ALL_CROSS_CHAIN_SEND_CHAINS at all — deposits
+// on hold) and not celo (no CCTP domain, routes through liFiAdapter
+// regardless of what's declared here — see bridge/index.ts's dispatch).
+const STELLAR_SOURCE_DESTINATION_CHAINS = new Set(["base", "solana"]);
 
 const provider = new CCTPV2BridgingProvider();
 
 interface StellarCctpBridgeReference {
+  direction: "toStellar";
   sourceChain: string;
   destinationAddress: string; // the real Stellar recipient (a G... strkey)
   burnTxHash: string;
-  // Set once mint_and_forward has been submitted on Stellar.
-  stellarMintTxHash?: string;
+}
+
+interface StellarSourceBridgeReference {
+  direction: "fromStellar";
+  destinationChain: string;
+  destinationAddress: string; // the real Base/Solana recipient
+  burnTxHash: string; // Stellar Soroban deposit_for_burn tx hash
+}
+
+// mintRecipient must be a real EVM/Solana address encoded to bytes32 — no
+// SDK involved on the Stellar burn side (same situation as Step A's
+// hookData, hand-rolled entirely by this codebase). Reused by both the
+// encoder and its own round-trip self-check below.
+function encodeDestinationRecipientBytes32(destinationChain: string, address: string): Buffer {
+  if (destinationChain.toLowerCase() === "solana") {
+    return addressToBytes32(new Uint8Array(getAddressEncoder().encode(toSolanaAddress(address))));
+  }
+  return addressToBytes32(hexToBytes(getAddress(address)));
+}
+
+// Step B's analogue of Step A's "compare against one hardcoded constant"
+// pre-flight (see the plan doc's own "Risk handling" reasoning) — there's
+// no fixed correct value to check here, mintRecipient is a different real
+// address every call, so the check instead re-derives the address from the
+// bytes32 about to be signed and hard-throws on any mismatch. Catches an
+// encoding bug on every single send, not just once.
+function assertRecipientEncodingRoundTrips(destinationChain: string, original: string, encoded: Buffer): void {
+  if (destinationChain.toLowerCase() === "solana") {
+    const decoded = getAddressDecoder().decode(new Uint8Array(encoded));
+    if (decoded !== original) {
+      throw new Error(
+        `Solana recipient bytes32 round-trip mismatch: encoded "${original}" but decoded back to "${decoded}" — refusing to burn`,
+      );
+    }
+    return;
+  }
+  const decodedHex = `0x${encoded.subarray(12).toString("hex")}`;
+  if (getAddress(decodedHex) !== getAddress(original)) {
+    throw new Error(
+      `EVM recipient bytes32 round-trip mismatch: encoded "${original}" but decoded back to "${decodedHex}" — refusing to burn`,
+    );
+  }
+}
+
+// Minimal WalletContext for the Stellar side of provider.fetchAttestation()/
+// provider.mint() when Stellar is the SOURCE — traced in the compiled SDK
+// source (see the plan doc) that neither call ever actually invokes
+// source.adapter, only validates its shape structurally (zod: must have
+// prepare/waitForTransaction as functions) and reads source.chain. Throws
+// instead of no-op if a future SDK version DOES start calling it, so that
+// change fails loudly instead of silently doing nothing.
+async function buildStellarSourceWalletContext(): Promise<{
+  adapter: { prepare: () => Promise<never>; waitForTransaction: () => Promise<never> };
+  address: string;
+  chain: ReturnType<typeof getStellarChainDefinition>;
+}> {
+  const keypair = await getStellarSigningKeypair();
+  return {
+    adapter: {
+      prepare: () => {
+        throw new Error("stellarSourceWalletContext.adapter.prepare should never be called — Stellar burns are hand-submitted");
+      },
+      waitForTransaction: () => {
+        throw new Error(
+          "stellarSourceWalletContext.adapter.waitForTransaction should never be called — Stellar tx status uses checkStellarTxStatus",
+        );
+      },
+    },
+    address: keypair.publicKey(),
+    chain: getStellarChainDefinition(),
+  };
+}
+
+async function initiateFromStellar(input: BridgeInitiateInput): Promise<BridgeInitiateResult> {
+  const destinationChain = input.destinationChain.toLowerCase();
+  if (!STELLAR_SOURCE_DESTINATION_CHAINS.has(destinationChain)) {
+    throw new Error(`stellarCctpAdapter doesn't support stellar -> ${destinationChain} yet`);
+  }
+  const destinationChainDef = getChainDefinition(destinationChain);
+  if (!destinationChainDef) throw new Error(`${destinationChain} has no CCTP chain definition registered`);
+  const destinationDomain = destinationChainDef.cctp?.domain;
+  if (destinationDomain == null) throw new Error(`${destinationChain} has no CCTP domain registered`);
+
+  // Belt-and-suspenders — service.ts/crossChainSendDraft.ts already
+  // validate this upstream, checked again here too, matching Step A's own
+  // "don't trust upstream, check again at the point of danger" precedent.
+  if (!isValidAddressForChain(destinationChain, input.destinationAddress)) {
+    throw new Error(`"${input.destinationAddress}" doesn't look like a valid ${destinationChain} address — refusing to burn`);
+  }
+  const mintRecipientBytes32 = encodeDestinationRecipientBytes32(destinationChain, input.destinationAddress);
+  assertRecipientEncodingRoundTrips(destinationChain, input.destinationAddress, mintRecipientBytes32);
+
+  const contracts = getStellarCctpContracts();
+  const amountBaseUnits = parseUnits(input.amount, STELLAR_USDC_DECIMALS).toString();
+
+  // deposit_for_burn's exact Soroban parameter names/order are PREDICTED
+  // by analogy to Circle's documented EVM CCTPv2 depositForBurn interface
+  // (converted to Soroban/snake_case) — NOT live-verified against the
+  // deployed contract's real spec, since this codebase had no outbound
+  // network access to Stellar's RPC when this was written (see the plan
+  // doc). Soroban's simulate-before-submit model inside
+  // submitStellarContractCall's server.prepareTransaction call fails
+  // cleanly here with no funds at risk if a param name/type is wrong —
+  // MUST be verified against contract.Client.from()'s real on-chain spec
+  // (same technique already used for mint_and_forward) before this ever
+  // handles real funds.
+  const submitted = await submitStellarContractCall(contracts.tokenMessengerMinter, "deposit_for_burn", [
+    nativeToScVal(BigInt(amountBaseUnits), { type: "i128" }),
+    nativeToScVal(destinationDomain, { type: "u32" }),
+    nativeToScVal(mintRecipientBytes32, { type: "bytes" }),
+    nativeToScVal(getStellarUsdcContractId(), { type: "address" }),
+    nativeToScVal(Buffer.alloc(32), { type: "bytes" }), // destination_caller: zero = any caller, matches the SDK's own non-forwarder default (verified at index.mjs:11748)
+    nativeToScVal(0n, { type: "i128" }), // max_fee
+    nativeToScVal(1000, { type: "u32" }), // min_finality_threshold — FAST, matches every other leg's transfer-speed choice
+  ]);
+
+  const bridgeReference: StellarSourceBridgeReference = {
+    direction: "fromStellar",
+    destinationChain,
+    destinationAddress: input.destinationAddress,
+    burnTxHash: submitted.hash,
+  };
+  return { sourceTxHash: submitted.hash, bridgeReference: bridgeReference as unknown as Record<string, unknown> };
+}
+
+async function checkStatusFromStellar(
+  ref: StellarSourceBridgeReference & { destinationTxHash?: string },
+): Promise<BridgePhaseCheckResult> {
+  if (!ref.destinationTxHash) {
+    const burnStatus = await checkStellarTxStatus(ref.burnTxHash);
+    if (burnStatus === "pending") return { phase: "SOURCE_PENDING" };
+    if (burnStatus === "failed") return { phase: "FAILED", detail: "stellar_source_burn_failed" };
+
+    const stellarSourceContext = await buildStellarSourceWalletContext();
+
+    // Same bounded, single-attempt attestation check used everywhere else
+    // in this codebase — "not ready" is the expected, common outcome of
+    // most ticks, not an error.
+    let attestation: Awaited<ReturnType<typeof provider.fetchAttestation>>;
+    try {
+      attestation = await provider.fetchAttestation(
+        stellarSourceContext as unknown as Parameters<typeof provider.fetchAttestation>[0],
+        ref.burnTxHash,
+        { maxRetries: 1, timeout: 5_000 },
+      );
+    } catch {
+      return { phase: "ATTESTATION_PENDING" };
+    }
+    if (attestation.status !== "complete") {
+      return { phase: "ATTESTATION_PENDING" };
+    }
+
+    // The destination-side mint is the exact same provider.mint() +
+    // executePrepared() call cctpBridge.ts's checkCctpStatus already makes
+    // for a plain Base<->Solana pair — confirmed via source tracing (see
+    // the plan doc) that provider.mint() never calls source.adapter at
+    // all, only destination.adapter. Zero new destination-side mechanism.
+    const destinationAdapter = await getAdapterForChain(ref.destinationChain);
+    const destinationSignerAddress = await getSignerAddressForChain(ref.destinationChain);
+    const destinationContext = {
+      adapter: destinationAdapter,
+      address: destinationSignerAddress,
+      chain: getChainDefinition(ref.destinationChain),
+      recipientAddress: ref.destinationAddress,
+    };
+
+    const mintPrepared = (await provider.mint(
+      stellarSourceContext as unknown as Parameters<typeof provider.mint>[0],
+      destinationContext as unknown as Parameters<typeof provider.mint>[1],
+      attestation,
+    )) as Prepared;
+    const mintTxHash = await executePrepared(ref.destinationChain, mintPrepared);
+    if (!mintTxHash) throw new Error(`receiveMessage returned no transaction hash for ${ref.destinationChain}`);
+    return { phase: "DESTINATION_PENDING", destinationTxHash: mintTxHash, detail: "destination_mint_broadcast" };
+  }
+
+  // Mint already broadcast on an earlier tick — check its own confirmation.
+  // A revert here is the STUCK case (see the poller's own risk-handling
+  // comment): the source burn already confirmed, real and final, so this
+  // must never fall back to FAILED/auto-refund.
+  const mintStatus = await checkTxConfirmed(ref.destinationChain, ref.destinationTxHash);
+  if (mintStatus === "pending") return { phase: "DESTINATION_PENDING", destinationTxHash: ref.destinationTxHash };
+  if (mintStatus === "reverted") {
+    return { phase: "FAILED", destinationTxHash: ref.destinationTxHash, detail: "destination_mint_reverted" };
+  }
+  return { phase: "DESTINATION_CONFIRMED", destinationTxHash: ref.destinationTxHash };
 }
 
 export const stellarCctpAdapter: BridgeAdapter = {
   supports(sourceChain: string, destinationChain: string): boolean {
-    return NON_STELLAR_SOURCE_CHAINS.has(sourceChain.toLowerCase()) && destinationChain.toLowerCase() === "stellar";
+    const source = sourceChain.toLowerCase();
+    const destination = destinationChain.toLowerCase();
+    if (NON_STELLAR_SOURCE_CHAINS.has(source) && destination === "stellar") return true;
+    if (source === "stellar" && STELLAR_SOURCE_DESTINATION_CHAINS.has(destination)) return true;
+    return false;
   },
 
   async quote(input): Promise<BridgeQuote> {
@@ -65,6 +260,9 @@ export const stellarCctpAdapter: BridgeAdapter = {
   async initiate(input: BridgeInitiateInput): Promise<BridgeInitiateResult> {
     if (!stellarCctpAdapter.supports(input.sourceChain, input.destinationChain)) {
       throw new Error(`stellarCctpAdapter doesn't support ${input.sourceChain} -> ${input.destinationChain} yet`);
+    }
+    if (input.sourceChain.toLowerCase() === "stellar") {
+      return initiateFromStellar(input);
     }
     const sourceChain = input.sourceChain.toLowerCase();
     const sourceChainDef = getChainDefinition(sourceChain);
@@ -146,6 +344,7 @@ export const stellarCctpAdapter: BridgeAdapter = {
     if (!burnTxHash) throw new Error(`depositForBurnWithHook returned no transaction hash for ${sourceChain}`);
 
     const bridgeReference: StellarCctpBridgeReference = {
+      direction: "toStellar",
       sourceChain,
       destinationAddress: input.destinationAddress,
       burnTxHash,
@@ -154,9 +353,21 @@ export const stellarCctpAdapter: BridgeAdapter = {
   },
 
   async checkStatus(bridgeReference: Record<string, unknown>): Promise<BridgePhaseCheckResult> {
-    const ref = bridgeReference as unknown as StellarCctpBridgeReference;
+    // The poller injects the DB's own destinationTxHash column onto this
+    // object under the literal key `destinationTxHash` on every tick (see
+    // crossChainSendConfirmationPoller.ts's advanceCrossChainSend) — the
+    // SAME convention cctpBridge.ts's checkCctpStatus already checks
+    // (`ref.destinationTxHash`). An earlier version of this function
+    // checked a locally-invented `stellarMintTxHash` field that the poller
+    // never populates, which meant it always re-submitted mint_and_forward
+    // on every tick, forever, even after the mint already confirmed.
+    const direction = (bridgeReference as { direction?: string }).direction ?? "toStellar";
+    if (direction === "fromStellar") {
+      return checkStatusFromStellar(bridgeReference as unknown as StellarSourceBridgeReference & { destinationTxHash?: string });
+    }
+    const ref = bridgeReference as unknown as StellarCctpBridgeReference & { destinationTxHash?: string };
 
-    if (!ref.stellarMintTxHash) {
+    if (!ref.destinationTxHash) {
       const burnStatus = await checkTxConfirmed(ref.sourceChain, ref.burnTxHash);
       if (burnStatus === "pending") return { phase: "SOURCE_PENDING" };
       if (burnStatus === "reverted") return { phase: "FAILED", detail: "source_burn_reverted" };
@@ -210,11 +421,11 @@ export const stellarCctpAdapter: BridgeAdapter = {
     // poller's own risk-handling comment): the source burn already
     // confirmed, real and final, so this must never fall back to
     // FAILED/auto-refund.
-    const mintStatus = await checkStellarTxStatus(ref.stellarMintTxHash);
-    if (mintStatus === "pending") return { phase: "DESTINATION_PENDING", destinationTxHash: ref.stellarMintTxHash };
+    const mintStatus = await checkStellarTxStatus(ref.destinationTxHash);
+    if (mintStatus === "pending") return { phase: "DESTINATION_PENDING", destinationTxHash: ref.destinationTxHash };
     if (mintStatus === "failed") {
-      return { phase: "FAILED", destinationTxHash: ref.stellarMintTxHash, detail: "stellar_mint_and_forward_failed" };
+      return { phase: "FAILED", destinationTxHash: ref.destinationTxHash, detail: "stellar_mint_and_forward_failed" };
     }
-    return { phase: "DESTINATION_CONFIRMED", destinationTxHash: ref.stellarMintTxHash };
+    return { phase: "DESTINATION_CONFIRMED", destinationTxHash: ref.destinationTxHash };
   },
 };

@@ -31,6 +31,7 @@ Examples:
 - "Move 25 USDC from Solana to Base, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":25,"sourceChainHint":"Solana","destinationChainHint":"Base","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
 - "I want to send someone on base but I only have celo" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","sourceChainHint":"Celo","destinationChainHint":"Base"}
 - "Send 15 USDC from Base to Stellar, to GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":15,"sourceChainHint":"Base","destinationChainHint":"Stellar","toAddress":"GBCPVOCOV3IX65YC6INLZKJTJPMJ77BTF7OYVIN6572FJNXDLKLKWXZD"}
+- "Send 10 USDC from Stellar to Base, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":10,"sourceChainHint":"Stellar","destinationChainHint":"Base","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
 - "What's my balance" → {"kind":"admin","action":"BALANCE"}
 - "What can you do" → {"kind":"admin","action":"HELP"}
 

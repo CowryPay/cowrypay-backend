@@ -33,27 +33,29 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Stellar's real source-side coverage right now: stellarCctpAdapter's own
-// NON_STELLAR_SOURCE_CHAINS also lists "optimism", but DEPOSIT_CHAINS (see
-// ai-agent/chat/intent.ts) excludes Optimism entirely — deposits there are
-// on hold, so no user can ever actually hold an Optimism balance to send
-// from. Dropped here for that reason, not because the adapter itself
+// Stellar's real coverage right now: stellarCctpAdapter's own
+// NON_STELLAR_SOURCE_CHAINS/STELLAR_SOURCE_DESTINATION_CHAINS also list
+// "optimism", but DEPOSIT_CHAINS (see ai-agent/chat/intent.ts) excludes
+// Optimism entirely — deposits there are on hold, so no user can ever
+// actually hold an Optimism balance to send from or land funds meant to be
+// spent from. Dropped here for that reason, not because the adapter itself
 // rejects it.
-const STELLAR_DESTINATION_SOURCE_CHAINS = ["base", "solana"];
+const STELLAR_DESTINATION_SOURCE_CHAINS = ["base", "solana"]; // chains that can send TO Stellar
+const STELLAR_SOURCE_DESTINATION_CHAINS = ["base", "solana"]; // chains Stellar can send TO
 
 // bridge.supports() returning false covers a few structurally different
 // cases that a flat "isn't supported yet" doesn't distinguish — same
 // vague-error problem providerSelection.ts's explainNoProviderMessage
-// already fixed for offramp. Stellar is the one asymmetric pair right
-// now (destination-only, and only from two of the four chains a user can
-// actually hold a balance on), so a Celo->Stellar or Stellar->anything
+// already fixed for offramp. Stellar is the one asymmetric-coverage chain
+// right now (both directions work, but each only for two of the four
+// chains a user can actually hold a balance on), so a Celo<->Stellar
 // attempt deserves a real explanation, not a dead end.
 function explainUnsupportedBridgePairMessage(sourceChain: string, destinationChain: string): string {
   if (destinationChain === "stellar") {
     return `Sending from ${capitalize(sourceChain)} to Stellar isn't supported yet. Stellar can currently be reached from: ${STELLAR_DESTINATION_SOURCE_CHAINS.map(capitalize).join(", ")}.`;
   }
   if (sourceChain === "stellar") {
-    return `Sending from Stellar isn't supported yet — Stellar can currently only be used as a destination (from ${STELLAR_DESTINATION_SOURCE_CHAINS.map(capitalize).join(", ")}), not as a source.`;
+    return `Sending from Stellar to ${capitalize(destinationChain)} isn't supported yet. From Stellar, you can currently send to: ${STELLAR_SOURCE_DESTINATION_CHAINS.map(capitalize).join(", ")}.`;
   }
   return `Sending from ${capitalize(sourceChain)} to ${capitalize(destinationChain)} isn't supported yet.`;
 }
