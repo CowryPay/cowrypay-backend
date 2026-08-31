@@ -30,6 +30,7 @@ import {
   isQuidaxEligible,
   isCentiivEligible,
   isPaycrestEligible,
+  explainNoProviderMessage,
   type OfframpProvider,
 } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
@@ -321,10 +322,7 @@ async function finalizeRemittanceDraft(
   // failing, not "the default was never valid to begin with").
   if (provider === "paycrest" && !isPaycrestEligible(chain, fiatCurrency)) {
     console.log(`[remittance-draft] no eligible provider for ${chain}/${fiatCurrency} after selection — defaulted to paycrest, which isn't eligible.`);
-    return {
-      ok: false,
-      message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
-    };
+    return { ok: false, message: explainNoProviderMessage(chain, fiatCurrency) };
   }
 
   async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {
@@ -377,15 +375,21 @@ async function finalizeRemittanceDraft(
     } else if (provider !== "paycrest") {
       // The alt provider failed and Paycrest was never a real option for
       // this chain — an honest, non-technical message instead of either
-      // provider's raw error text. Logged loudly since this message alone
-      // gives no diagnostic trail otherwise.
+      // provider's raw error text. Deliberately NOT explainNoProviderMessage
+      // here: that's for "this chain/currency combo has no eligible
+      // provider at all" (a structural fact, checked before any order was
+      // attempted); this is a real order ATTEMPT that failed at the
+      // eligible provider (e.g. a bank-account verification rejection) —
+      // saying "isn't supported" would be actively wrong when it may well
+      // succeed on a retry. Logged loudly since this message alone gives
+      // no diagnostic trail otherwise.
       console.log(
         `[remittance-draft] ${provider} order creation failed for ${chain}, no fallback available:`,
         err instanceof Error ? err.message : err,
       );
       return {
         ok: false,
-        message: `Off-ramping from ${chain} isn't available right now — please try again shortly or try a different chain.`,
+        message: `We couldn't complete this transfer right now — please try again in a moment.`,
       };
     } else {
       return {

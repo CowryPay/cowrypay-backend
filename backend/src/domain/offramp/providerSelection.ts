@@ -1,4 +1,4 @@
-import { getOfframpRate as getPaycrestRate, isPaycrestEligible } from "./paycrestAdapter.js";
+import { getOfframpRate as getPaycrestRate, isPaycrestEligible, PAYCREST_SUPPORTED_FIAT_CURRENCIES } from "./paycrestAdapter.js";
 import { getOfframpRate as getQuidaxRate, quidaxNetworkFor, QUIDAX_SUPPORTED_FIAT_CURRENCIES } from "./quidaxAdapter.js";
 import { getOfframpRate as getCentiivRate, centiivNetworkFor, CENTIIV_SUPPORTED_FIAT_CURRENCIES } from "./centiivAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
@@ -73,6 +73,65 @@ function isTokenSupportedOnChain(chain: string, token: string): boolean {
   }
 }
 
+// The 5 chains this codebase's off-ramp flow ever sources from — kept
+// here (not imported from chains.ts's EVM-only SUPPORTED_CHAINS) since
+// this is specifically the "which chains might a user be sending FROM"
+// universe for building a helpful error, not a wallet-provisioning list.
+const ALL_OFFRAMP_CHAINS = ["celo", "base", "optimism", "solana", "stellar"];
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Every fiat currency any provider supports right now, for enumerating
+// "what CAN this chain send to" — deliberately NOT limited to whichever
+// currency the user originally asked about.
+const ALL_SUPPORTED_FIAT_CURRENCIES = new Set([
+  ...PAYCREST_SUPPORTED_FIAT_CURRENCIES,
+  ...QUIDAX_SUPPORTED_FIAT_CURRENCIES,
+  ...CENTIIV_SUPPORTED_FIAT_CURRENCIES,
+]);
+
+function chainsSupportingCurrency(fiatCurrency: string): string[] {
+  return ALL_OFFRAMP_CHAINS.filter(
+    (chain) =>
+      isPaycrestEligible(chain, fiatCurrency) || isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency),
+  );
+}
+
+function currenciesReachableFromChain(chain: string): string[] {
+  return [...ALL_SUPPORTED_FIAT_CURRENCIES].filter(
+    (ccy) => isPaycrestEligible(chain, ccy) || isQuidaxEligible(chain, ccy) || isCentiivEligible(chain, ccy),
+  );
+}
+
+// Real incident this replaces: "No off-ramp provider is available for
+// this amount/chain right now" told a user their Celo->Ghana send failed
+// with no indication of WHY, or whether "right now" meant "try again in
+// a minute" (implying a transient outage) versus "this combination isn't
+// supported at all" (the actual, permanent reason — none of the three
+// providers cover both Celo AND GHS between them). Exported so
+// remittanceDraft.ts's own near-identical generic messages can reuse the
+// same explanation instead of drifting out of sync with it.
+export function explainNoProviderMessage(chain: string, fiatCurrency: string): string {
+  const chainLabel = capitalize(chain);
+  const currencyLabel = fiatCurrency.toUpperCase();
+  const altChains = chainsSupportingCurrency(fiatCurrency).filter((c) => c.toLowerCase() !== chain.toLowerCase());
+  const altCurrencies = currenciesReachableFromChain(chain);
+
+  const parts = [`Sending from ${chainLabel} to ${currencyLabel} isn't supported right now.`];
+  if (altChains.length > 0) {
+    parts.push(`${currencyLabel} can currently be reached from: ${altChains.map(capitalize).join(", ")}.`);
+  }
+  if (altCurrencies.length > 0) {
+    parts.push(`${chainLabel} can currently send to: ${altCurrencies.join(", ")}.`);
+  }
+  if (altChains.length === 0 && altCurrencies.length === 0) {
+    parts.push(`${currencyLabel} isn't supported by any provider right now.`);
+  }
+  return parts.join(" ");
+}
+
 // Queries every eligible provider in parallel and returns whichever gives
 // the user more fiat. A provider erroring out (rate-limited, momentarily
 // down, amount too small for their liquidity) is treated as "not
@@ -117,7 +176,7 @@ export async function selectOfframpProvider(params: {
   );
 
   if (quotes.length === 0) {
-    throw new Error("No off-ramp provider is available for this amount/chain right now");
+    throw new Error(explainNoProviderMessage(params.chain, params.fiatCurrency));
   }
   return quotes.reduce((best, q) => (Number(q.toAmount) > Number(best.toAmount) ? q : best));
 }
