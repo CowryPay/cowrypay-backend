@@ -281,7 +281,23 @@ export const stellarCctpAdapter: BridgeAdapter = {
     if (forwarderBytes32.length !== 32) {
       throw new Error("Stellar CctpForwarder address did not encode to exactly 32 bytes — refusing to burn");
     }
-    const forwarderHex = `0x${forwarderBytes32.toString("hex")}`;
+    // @circle-fin/adapter-solana-kit's own depositForBurnWithHook builder
+    // (index.mjs's buildInstructions$2, traced live after a real "Non-base58
+    // character" failure on a Solana-sourced send, 2026-09-01) has a real
+    // asymmetry: mintRecipient gets 0x-hex handling
+    // (`mintRecipient.startsWith('0x') ? new PublicKey(Buffer.from(...)) :
+    // new PublicKey(mintRecipient)`), but destinationCaller does NOT — it's
+    // passed straight into `new PublicKey(destinationCaller ?? ...)`, which
+    // treats a plain string as base58 and throws on our 0x-prefixed hex
+    // (the literal "0" and "x" characters aren't valid base58). The EVM
+    // adapter (viem) wants hex either way — confirmed working there via the
+    // earlier mainnet dry-run — so this only needs to branch for Solana.
+    // getAddressDecoder() (from @solana/kit, already imported for Step B's
+    // own address handling) is exactly a base58 encoder for raw bytes here.
+    const forwarderEncoded =
+      sourceChain === "solana"
+        ? getAddressDecoder().decode(new Uint8Array(forwarderBytes32))
+        : `0x${forwarderBytes32.toString("hex")}`;
     // The real recipient must be a genuine Stellar account address (G...),
     // never the forwarder's own contract address (C...) — that would mean
     // hookData ends up telling mint_and_forward to forward funds to
@@ -329,8 +345,8 @@ export const stellarCctpAdapter: BridgeAdapter = {
       "cctp.v2.depositForBurnWithHook",
       {
         amount: BigInt(amountBaseUnits),
-        mintRecipient: forwarderHex,
-        destinationCaller: forwarderHex,
+        mintRecipient: forwarderEncoded,
+        destinationCaller: forwarderEncoded,
         maxFee: 0n,
         minFinalityThreshold: 1000, // FAST — matches cctpBridge.ts's own transferSpeed choice
         fromChain: sourceChainDef,
