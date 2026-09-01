@@ -34,7 +34,7 @@ import {
   type OfframpProvider,
 } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
-import { getTokenConfig } from "../wallets/chains.js";
+import { getTokenConfig, SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
@@ -191,7 +191,12 @@ async function finalizeRemittanceDraft(
   // fallback-to-wallet.chain path above, since a funded balance can't exist
   // for a token/chain pair chains.ts never enabled in the first place.
   // Stellar/Solana are already covered by the fundedChains check itself.
-  if (["celo", "base", "optimism"].includes(chain.toLowerCase())) {
+  // Sourced from chains.ts's own registry (EVM_CHAINS), not a separately
+  // maintained literal list — real bug class this avoids: adding a new
+  // EVM chain to chains.ts without remembering to update every one of the
+  // several other hardcoded ["celo","base","optimism"] copies that used
+  // to exist across this codebase.
+  if (EVM_CHAINS.includes(chain.toLowerCase())) {
     try {
       getTokenConfig(chain, tokenSymbol);
     } catch (err) {

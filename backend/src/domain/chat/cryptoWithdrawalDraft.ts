@@ -121,7 +121,7 @@ export async function resolveCryptoWithdrawalIntent(
 
   // Omitted means USDC, the only token that existed before USDT support.
   const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
-  if (["celo", "base", "optimism"].includes(chain)) {
+  if (EVM_CHAINS.includes(chain)) {
     try {
       getTokenConfig(chain, tokenSymbol);
     } catch (err) {

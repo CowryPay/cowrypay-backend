@@ -15,7 +15,7 @@ import { isValidAddressForChain } from "./addressValidation.js";
 import { computeCryptoWithdrawalFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
-import { getTokenConfig } from "../wallets/chains.js";
+import { getTokenConfig, SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { sanitizeForDb } from "../../utils/format.js";
 
 export interface InitiateCryptoWithdrawalInput {
@@ -89,7 +89,7 @@ export async function initiateCryptoWithdrawal(
   // EVM chains are validated here up front via chains.ts's token map (e.g.
   // USDT on Base) so an unsupported pairing fails clean, before any balance
   // is touched, rather than surfacing later as an opaque adapter error.
-  if (["celo", "base", "optimism"].includes(input.chain.toLowerCase())) {
+  if (EVM_CHAINS.includes(input.chain.toLowerCase())) {
     getTokenConfig(input.chain, tokenSymbol);
   }
 
@@ -143,7 +143,7 @@ export async function initiateCryptoWithdrawal(
   // credited before that fix existed, or a case where that sweep attempt
   // itself failed. Does nothing for a shortfall bigger than this one
   // user's own deposit — that's correctly not this function's job.
-  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(input.chain) && env.awsKmsPayoutKeyArn) {
+  if (wallet.provider === "aws-kms" && EVM_CHAINS.includes(input.chain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
       const { decimals: tokenDecimals } = getTokenConfig(input.chain, tokenSymbol);

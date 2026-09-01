@@ -14,14 +14,23 @@ import { env } from "../../config/env.js";
 // yet — worth remembering before declaring a capability gap on any future
 // provider integration too.
 //
-// Only STELLAR, SOLANA, and BASE are eligible among our five chains —
+// STELLAR, SOLANA, BASE, and ETHEREUM are eligible among our six chains —
 // OPTIMISM appears in Centiiv's network enum but has no real USDC->NGN
 // "rail" (confirmed via a live 400: "No rail found for USDC to NGN on
-// OPTIMISM"), and CELO isn't in their network enum at all.
+// OPTIMISM"), and CELO isn't in their network enum at all. ETHEREUM
+// verified live (2026-09-01) with real working quotes across NGN
+// (rate 1371.7, 0 fees), KES (127.34, 0 fees), and UGX (3760.7675,
+// 0 fees) — the widest/cheapest Ethereum coverage of the three
+// providers, TZS is the one gap (not in Centiiv's currency support at
+// all, see CENTIIV_SUPPORTED_FIAT_CURRENCIES, independent of chain).
+// Centiiv's network enum as of this date is actually much larger
+// (ARBITRUM, POLYGON, AVALANCHE, APTOS, BSC, HYPEREVM all appeared in a
+// live validation error) — only wiring up what we actually need here.
 const NETWORK_NAMES: Record<string, string> = {
   stellar: "STELLAR",
   solana: "SOLANA",
   base: "BASE",
+  ethereum: "ETHEREUM",
 };
 
 export function centiivNetworkFor(chain: string): string | null {

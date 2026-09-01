@@ -7,10 +7,9 @@ import { sweepWallet as sweepEvmWallet } from "../wallets/depositSweeper.js";
 import { sweepWallet as sweepSolanaWallet } from "../wallets/solanaDepositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getSolanaMint } from "../wallets/solanaAdapter.js";
+import { SUPPORTED_CHAINS as AWS_KMS_SWEEP_CHAINS } from "../wallets/chains.js";
 import { depositsRepo } from "./repository.js";
 import { screenDeposit } from "./screening.js";
-
-const AWS_KMS_SWEEP_CHAINS = ["celo", "base", "optimism"];
 
 // Real structural gap this closes: Blockradar's master wallet has
 // auto-sweep enabled (isAutoSweep: true, confirmed live via a real

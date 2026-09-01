@@ -73,11 +73,11 @@ function isTokenSupportedOnChain(chain: string, token: string): boolean {
   }
 }
 
-// The 5 chains this codebase's off-ramp flow ever sources from — kept
+// The 6 chains this codebase's off-ramp flow ever sources from — kept
 // here (not imported from chains.ts's EVM-only SUPPORTED_CHAINS) since
 // this is specifically the "which chains might a user be sending FROM"
 // universe for building a helpful error, not a wallet-provisioning list.
-const ALL_OFFRAMP_CHAINS = ["celo", "base", "optimism", "solana", "stellar"];
+const ALL_OFFRAMP_CHAINS = ["celo", "base", "optimism", "solana", "stellar", "ethereum"];
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);

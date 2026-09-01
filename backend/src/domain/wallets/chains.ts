@@ -1,5 +1,5 @@
 import type { Chain } from "viem";
-import { celo, base, optimism } from "viem/chains";
+import { celo, base, optimism, mainnet } from "viem/chains";
 import { parseEther, parseUnits } from "viem";
 import { env } from "../../config/env.js";
 
@@ -88,6 +88,28 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     },
     gasTopUpAmount: parseEther("0.0001"),
     gasBufferThreshold: parseEther("0.00003"),
+  },
+  // Verified live (2026-09-01): symbol()/decimals() eth_call against the
+  // contract itself (not trusted from memory) returned "USDC"/6 exactly.
+  // Gas constants are NOT sized off Base/Optimism's cents-level costs —
+  // Ethereum mainnet gas is a different order of magnitude (a plain USDC
+  // transfer real eth_estimateGas'd at 63,054 gas, in the same ~65k range
+  // as every other chain here) and, critically, far more volatile than
+  // any L2 this registry lists: real baseFee+priority at the time this
+  // was sized was ~0.2 gwei (a standard transfer would cost ~$0.03), but
+  // gas here can spike 50-100x during real congestion in a way Celo/Base/
+  // Optimism essentially never do. Sized against a deliberately more
+  // cautious ~10 gwei baseline instead of that quiet observed price —
+  // gasStatusMonitor.ts is what's relied on to catch a genuine spike
+  // beyond this, not a bigger static buffer.
+  ethereum: {
+    viemChain: mainnet,
+    rpcUrl: env.ethereumRpcUrl,
+    tokens: {
+      USDC: { address: "0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
+    },
+    gasTopUpAmount: parseEther("0.005"),
+    gasBufferThreshold: parseEther("0.002"),
   },
 };
 

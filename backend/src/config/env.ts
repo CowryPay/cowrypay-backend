@@ -161,6 +161,12 @@ export const env = {
   celoRpcUrl: process.env.CELO_RPC_URL ?? "https://forno.celo.org",
   baseRpcUrl: process.env.BASE_RPC_URL ?? "https://mainnet.base.org",
   optimismRpcUrl: process.env.OPTIMISM_RPC_URL ?? "https://mainnet.optimism.io",
+  // Public fallback keeps the app bootable even if unset, same as the
+  // three chains above — but a paid RPC (the same Alchemy account already
+  // used for Celo/Base/Optimism/Solana) is set as the real value in every
+  // real environment, since Ethereum mainnet's public endpoints are
+  // rate-limited far too aggressively for real use.
+  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL ?? "https://eth.llamarpc.com",
   // Stellar support (USDC only, shared omnibus deposit address + per-user
   // memo — a different custody model from every EVM chain above). All only
   // required once Stellar code paths are actually exercised — checked

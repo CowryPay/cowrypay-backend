@@ -19,7 +19,7 @@ import { isPaycrestEligible, type OfframpProvider } from "./providerSelection.js
 import { getReceiptStatus } from "../wallets/receiptStatus.js";
 import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
-import { getTokenConfig } from "../wallets/chains.js";
+import { getTokenConfig, SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { parseUnits } from "viem";
 import { sanitizeForDb, formatAmount } from "../../utils/format.js";
 
@@ -208,7 +208,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // up front via chains.ts's token map (e.g. USDT on Base) so an
   // unsupported pairing fails clean, before any balance is touched.
   const tokenSymbol = lockedPreview?.tokenSymbol ?? input.tokenSymbol ?? env.defaultTokenSymbol;
-  if (["celo", "base", "optimism"].includes(chain.toLowerCase())) {
+  if (EVM_CHAINS.includes(chain.toLowerCase())) {
     getTokenConfig(chain, tokenSymbol);
   }
   const amount = lockedPreview?.amountHuman ?? input.amount;
@@ -342,7 +342,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // before falling through to withdraw()'s normal (accurate) liquidity
   // error. Does nothing for a shortfall bigger than this one user's own
   // deposit — that's correctly not this function's job.
-  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain) && env.awsKmsPayoutKeyArn) {
+  if (wallet.provider === "aws-kms" && EVM_CHAINS.includes(chain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
       const { decimals: tokenDecimals } = getTokenConfig(chain, tokenSymbol);
@@ -440,7 +440,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // derived from `wallet`), so gating on it too means this block can
   // never again run getReceiptStatus against a chain chains.ts doesn't
   // know, no matter what wallet.provider says.
-  if (wallet.provider === "aws-kms" && ["celo", "base", "optimism"].includes(chain.toLowerCase()) && payout.txHash) {
+  if (wallet.provider === "aws-kms" && EVM_CHAINS.includes(chain.toLowerCase()) && payout.txHash) {
     const confirmation = await waitForEvmPayoutConfirmation(chain, payout.txHash);
 
     if (confirmation === "reverted") {

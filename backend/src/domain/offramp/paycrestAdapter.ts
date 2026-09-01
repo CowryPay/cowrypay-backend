@@ -11,7 +11,13 @@ import { env } from "../../config/env.js";
 // fallback-to-Paycrest retry in remittanceDraft.ts, which was blindly
 // retrying Paycrest for Stellar sends whenever the winning alt provider
 // failed — producing exactly this confusing raw validation error instead
-// of an honest "no provider available" message.
+// of an honest "no provider available" message. Ethereum is NOT in this
+// set — verified live (2026-09-01) with real working rates: network name
+// is "ethereum" (not "eth", which gets the same hard-unsupported error
+// shape). NGN and TZS both return real rates on Ethereum; KES and UGX
+// currently return "no provider available" there — same liquidity/preview
+// gap as Celo's own quirk above, not a structural unsupported-network
+// error, so not added here.
 const UNSUPPORTED_NETWORKS = new Set(["optimism", "solana", "stellar"]);
 
 // Real gap found live (2026-08-31), same bug class already fixed for

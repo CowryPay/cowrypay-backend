@@ -4,13 +4,19 @@ import { env } from "../../config/env.js";
 // their docs disagreed with the live API in multiple places (e.g. docs say
 // "sol" and "lisk", the live API only accepts "solana" and "lsk"; docs list
 // Arbitrum as USDC-supported, the live API rejects it under every name
-// tried). Only base/solana are eligible for USDC on Quidax at all among our
-// five chains — Celo/Optimism/Stellar aren't supported by Quidax for USDC
+// tried). base/solana/ethereum are eligible for USDC on Quidax among our
+// six chains — Celo/Optimism/Stellar aren't supported by Quidax for USDC
 // regardless of naming (see providerSelection.ts for the eligibility gate
 // that keeps this adapter from ever being called for those chains).
+// Ethereum is the same story as "sol"/"lisk" above: neither "ethereum" nor
+// "eth" work, only the non-obvious "erc20" — verified live (2026-09-01)
+// with a real working quote (10 USDC -> fee 25.0, to_amount 13709.4 NGN).
+// Quidax only ever covers NGN among our currencies regardless of chain
+// (see QUIDAX_SUPPORTED_FIAT_CURRENCIES) — Ethereum doesn't change that.
 const NETWORK_NAMES: Record<string, string> = {
   base: "base",
   solana: "solana",
+  ethereum: "erc20",
 };
 
 export function quidaxNetworkFor(chain: string): string | null {

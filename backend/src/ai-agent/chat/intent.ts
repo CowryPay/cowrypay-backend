@@ -52,7 +52,7 @@ export function classifyIntent(message: string): ChatIntent {
 // longer offer it as a deposit option, and an existing balance there (if
 // any) must stay off-rampable via the dynamic fundedChains check in
 // remittanceDraft.ts, which never depended on this list to begin with.
-export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana"] as const;
+export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana", "ethereum"] as const;
 
 // "address" is included as its own trigger, not just "deposit"/"top up"/
 // etc — found live that "what's my solana address" has no "deposit" in it
