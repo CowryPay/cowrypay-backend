@@ -333,30 +333,46 @@ export const stellarCctpAdapter: BridgeAdapter = {
     // Verified live (2026-08-31, throwaway key, prepare-only, no
     // broadcast) that this construction succeeds with a hand-built
     // Stellar chain definition and this exact hookData format.
-    const burnPrepared = (await (
-      adapter as unknown as {
-        prepareAction(
-          action: string,
-          params: unknown,
-          ctx: { chain: unknown; address: string },
-        ): Promise<Prepared>;
-      }
-    ).prepareAction(
-      "cctp.v2.depositForBurnWithHook",
-      {
-        amount: BigInt(amountBaseUnits),
-        mintRecipient: forwarderEncoded,
-        destinationCaller: forwarderEncoded,
-        maxFee: 0n,
-        minFinalityThreshold: 1000, // FAST — matches cctpBridge.ts's own transferSpeed choice
-        fromChain: sourceChainDef,
-        toChain: getStellarChainDefinition(),
-        hookData: hookDataHex,
-      },
-      ctx,
-    )) as Prepared;
+    const typedAdapter = adapter as unknown as {
+      prepareAction(action: string, params: unknown, ctx: { chain: unknown; address: string }): Promise<Prepared>;
+    };
+    const burnActionParams = {
+      amount: BigInt(amountBaseUnits),
+      mintRecipient: forwarderEncoded,
+      destinationCaller: forwarderEncoded,
+      maxFee: 0n,
+      minFinalityThreshold: 1000, // FAST — matches cctpBridge.ts's own transferSpeed choice
+      fromChain: sourceChainDef,
+      toChain: getStellarChainDefinition(),
+      hookData: hookDataHex,
+    };
 
-    const burnTxHash = await executePrepared(sourceChain, burnPrepared);
+    // A dropped-transaction timeout is a real, confirmed live failure mode
+    // here (2026-09-01, Solana-sourced burn): @circle-fin/adapter-solana-kit
+    // never attaches a Solana priority fee for a server-side (non-browser-
+    // wallet) signer in any version — traced through 1.6.1, the latest —
+    // so under real mainnet congestion a broadcast transaction can miss its
+    // ~60-90s blockhash window and simply never land. Confirmed live (via
+    // direct getSignatureStatuses/getTransaction RPC calls) that a dropped
+    // tx never touches chain state, so retrying from scratch is safe — a
+    // fresh prepareAction call generates both a new blockhash and a new
+    // ephemeral messageSentEventData keypair, not a resubmission of the
+    // same doomed transaction. Matched narrowly on this exact message (not
+    // a blanket retry-on-any-error) so a real revert or validation failure
+    // still surfaces immediately instead of being retried pointlessly.
+    const MAX_BURN_ATTEMPTS = 3;
+    let burnTxHash: string | null = null;
+    for (let attempt = 1; attempt <= MAX_BURN_ATTEMPTS; attempt++) {
+      try {
+        const burnPrepared = (await typedAdapter.prepareAction("cctp.v2.depositForBurnWithHook", burnActionParams, ctx)) as Prepared;
+        burnTxHash = await executePrepared(sourceChain, burnPrepared);
+        break;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const isDroppedTxTimeout = /not confirmed on-chain within/i.test(message);
+        if (!isDroppedTxTimeout || attempt === MAX_BURN_ATTEMPTS) throw err;
+      }
+    }
     if (!burnTxHash) throw new Error(`depositForBurnWithHook returned no transaction hash for ${sourceChain}`);
 
     const bridgeReference: StellarCctpBridgeReference = {
