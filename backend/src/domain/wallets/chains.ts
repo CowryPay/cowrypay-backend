@@ -106,7 +106,7 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     viemChain: mainnet,
     rpcUrl: env.ethereumRpcUrl,
     tokens: {
-      USDC: { address: "0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
+      USDC: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
     },
     gasTopUpAmount: parseEther("0.005"),
     gasBufferThreshold: parseEther("0.002"),
