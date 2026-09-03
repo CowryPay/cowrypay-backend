@@ -22,11 +22,12 @@ import type { ParsedIntent } from "./schemas.js";
 // crossChainSend/bridge/stellarCctpAdapter.ts) — this list gates broadly
 // (which chains exist at all in this feature), NOT precisely which pair
 // directions work; stellarCctpAdapter's own supports() is the exact
-// authority there, and currently only allows Stellar as a DESTINATION
-// (Base/Optimism/Solana -> Stellar), never as a source yet. A user
-// picking "Stellar" as their source chain will cleanly fail at the
-// bridge.supports() check below with a real "not supported yet" message,
-// not silently do the wrong thing.
+// authority there. As of 2026-08-31, Stellar works as a destination
+// (Base/Optimism/Solana -> Stellar) AND as a source, but only to Base or
+// Solana (Stellar -> Base/Solana; Stellar -> Celo cleanly fails, since
+// Celo routes through liFiAdapter regardless, which has no Stellar
+// support). See explainUnsupportedBridgePairMessage below for the exact
+// per-pair messaging.
 export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana", "stellar"];
 
 function capitalize(s: string): string {
