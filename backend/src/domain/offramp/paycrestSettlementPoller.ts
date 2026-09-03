@@ -3,6 +3,7 @@ import { getOrderStatus } from "./paycrestAdapter.js";
 import { resolveNextSendState } from "./paycrestWebhook.js";
 import { sendsRepo } from "./repository.js";
 import { applyTerminalFailureTransition } from "./sendStateTransition.js";
+import { verifyRefundOnChain } from "./refundVerification.js";
 
 // Closes the gap left when Paycrest's payment_order.* webhook doesn't
 // arrive — confirmed live that it wasn't (zero hits on /webhooks/paycrest
@@ -28,12 +29,33 @@ export async function pollPendingSettlements(): Promise<void> {
       // amountPaid is Paycrest's equivalent "did money actually move"
       // signal, separate from the top-level status string. A refunded/
       // expired order that still shows a real amountPaid would mean their
-      // own data disagrees with itself — auto-crediting the user in that
-      // case risks double-paying them, so it's held for manual review
-      // instead of trusted blindly.
+      // own data disagrees with itself. Same resolution as Centiiv's
+      // version too: check what actually happened on-chain rather than
+      // trust either contradictory field — see refundVerification.ts's
+      // own comment for the live incident this closes. Falls through to
+      // the existing manual-review path unchanged if it can't confirm.
       if ((nextState === "FAILED" || nextState === "REFUNDED") && Number(orderStatus.amountPaid ?? 0) > 0) {
+        if (nextState === "REFUNDED") {
+          const onChain = await verifyRefundOnChain(send);
+          if (onChain.confirmed && onChain.txHash) {
+            console.log(
+              `[paycrest-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "REFUNDED" with contradictory amountPaid, but verified on-chain: refund tx ${onChain.txHash} — crediting.`,
+            );
+            await withTransaction((client) =>
+              applyTerminalFailureTransition(
+                client,
+                send,
+                "REFUNDED",
+                `${event} (amountPaid contradicted this, but on-chain refund verified: ${onChain.txHash})`,
+                "paycrest_settlement_poller",
+                { txHash: onChain.txHash! },
+              ),
+            );
+            continue;
+          }
+        }
         console.error(
-          `[paycrest-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${orderStatus.status}" but a non-zero amountPaid (${orderStatus.amountPaid}) — Paycrest's own data contradicts itself. NOT auto-crediting; needs manual review.`,
+          `[paycrest-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${orderStatus.status}" but a non-zero amountPaid (${orderStatus.amountPaid}) — Paycrest's own data contradicts itself, and no matching refund was found on-chain. NOT auto-crediting; needs manual review.`,
         );
         continue;
       }

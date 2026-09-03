@@ -3,6 +3,7 @@ import type { SendState } from "../../types.js";
 import { getOrderStatus } from "./centiivAdapter.js";
 import { sendsRepo } from "./repository.js";
 import { applyTerminalFailureTransition, resolveNextSendState } from "./sendStateTransition.js";
+import { verifyRefundOnChain } from "./refundVerification.js";
 
 // Same safety net as paycrestSettlementPoller.ts / quidaxSettlementPoller.ts
 // (a webhook silently never arriving is a proven real failure mode in this
@@ -47,12 +48,41 @@ export async function pollPendingSettlements(): Promise<void> {
       // in full — confirmed by the payout amount matching this order's
       // amount at their own quoted rate almost exactly. Auto-crediting the
       // user in that case would double-pay them (real fiat already landed
-      // in their bank AND their CowryPay balance restored) — held for
-      // manual review instead, same conservative stance Quidax's poller
-      // already takes for its own less-trustworthy status field.
+      // in their bank AND their CowryPay balance restored) — Centiiv's own
+      // data contradicts itself, so it can't be trusted either way on its
+      // own. What CAN be trusted is checking the one thing neither status
+      // field nor fulfillments actually prove: did money genuinely move.
+      // A second live incident (2026-09-03, send 071dec74) turned out to
+      // be the opposite case — REFUNDED was correct, fulfillments was the
+      // stale one — and the real answer was sitting on-chain the whole
+      // time: the net amount had actually landed back at our treasury 9
+      // seconds after the payout. verifyRefundOnChain automates that same
+      // trace. If it can't confirm either way (RPC error, no match found),
+      // this still falls through to manual review exactly as before —
+      // this only ever adds a way to resolve the ambiguity, never removes
+      // the existing safety net.
       if ((nextState === "FAILED" || nextState === "REFUNDED") && status.fulfillments.length > 0) {
+        if (nextState === "REFUNDED") {
+          const onChain = await verifyRefundOnChain(send);
+          if (onChain.confirmed && onChain.txHash) {
+            console.log(
+              `[centiiv-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "REFUNDED" with contradictory fulfillments, but verified on-chain: refund tx ${onChain.txHash} — crediting.`,
+            );
+            await withTransaction((client) =>
+              applyTerminalFailureTransition(
+                client,
+                send,
+                "REFUNDED",
+                `status:REFUNDED (fulfillments contradicted this, but on-chain refund verified: ${onChain.txHash})`,
+                "centiiv_settlement_poller",
+                { txHash: onChain.txHash! },
+              ),
+            );
+            continue;
+          }
+        }
         console.error(
-          `[centiiv-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${status.status}" but a non-empty fulfillments array — Centiiv's own data contradicts itself. NOT auto-crediting; needs manual review. Fulfillments: ${JSON.stringify(status.fulfillments)}`,
+          `[centiiv-settlement-poller] send ${send.id} (order ${send.providerOrderId}) has status "${status.status}" but a non-empty fulfillments array — Centiiv's own data contradicts itself, and no matching refund was found on-chain. NOT auto-crediting; needs manual review. Fulfillments: ${JSON.stringify(status.fulfillments)}`,
         );
         continue;
       }
