@@ -164,6 +164,28 @@ export interface AdminSendDiagnostic {
   providerOrderId: string | null;
 }
 
+export interface AdminCrossChainSendDiagnostic {
+  id: string;
+  userId: string;
+  sourceChain: string;
+  destinationChain: string;
+  tokenSymbol: string;
+  amountHuman: string;
+  feeAmount: string;
+  state: string;
+  sourceTxHash: string | null;
+  destinationTxHash: string | null;
+  createdAt: string;
+  sourceConfirmedAt: string | null;
+  destinationConfirmedAt: string | null;
+  // The most recent transition's own trigger string — same "what actually
+  // happened last" signal listRecentSends's settlementTrigger gives for
+  // regular sends, but general-purpose here since a cross-chain send's
+  // interesting last event varies a lot more (bridge_initiated, a CCTP
+  // phase, destination_mint_reattest_failed, manual_refund, ...).
+  lastTrigger: string | null;
+}
+
 // One-shot cross-user aggregate read for the admin overview dashboard —
 // deliberately separate from every other repository here, which are all
 // scoped to a single user's own data by design (every route in this
@@ -591,6 +613,46 @@ export const adminRepo = {
       createdAt: r.created_at,
       feeSweepTrigger: r.fee_sweep_trigger,
       providerOrderId: r.provider_order_id,
+    }));
+  },
+
+  // Same shape/purpose as listRecentSends above — the admin dashboard's
+  // "Cross-chain sends" tab was already calling GET /admin/cross-chain-sends
+  // with no route ever built to answer it. `chain` matches either leg
+  // (source or destination), not just one column, since "show me
+  // everything touching Base" is the more useful question for a chain
+  // that appears on both sides of different rows.
+  async listRecentCrossChainSends(chain: string | undefined, limit: number): Promise<AdminCrossChainSendDiagnostic[]> {
+    const { rows } = await pool.query(
+      `select c.id, c.user_id, c.source_chain, c.destination_chain, c.token_symbol,
+              c.amount_human, c.fee_amount, c.state, c.source_tx_hash, c.destination_tx_hash,
+              c.created_at, c.source_confirmed_at, c.destination_confirmed_at,
+              (
+                select t.trigger from cross_chain_send_state_transitions t
+                where t.cross_chain_send_id = c.id
+                order by t.created_at desc limit 1
+              ) as last_trigger
+       from cross_chain_sends c
+       where ($1::text is null or c.source_chain = $1 or c.destination_chain = $1)
+       order by c.created_at desc
+       limit $2`,
+      [chain ?? null, limit],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.user_id,
+      sourceChain: r.source_chain,
+      destinationChain: r.destination_chain,
+      tokenSymbol: r.token_symbol,
+      amountHuman: r.amount_human,
+      feeAmount: r.fee_amount,
+      state: r.state,
+      sourceTxHash: r.source_tx_hash,
+      destinationTxHash: r.destination_tx_hash,
+      createdAt: r.created_at,
+      sourceConfirmedAt: r.source_confirmed_at,
+      destinationConfirmedAt: r.destination_confirmed_at,
+      lastTrigger: r.last_trigger,
     }));
   },
 

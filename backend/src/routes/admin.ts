@@ -88,6 +88,16 @@ adminRouter.get("/admin/sends", async (req: Request, res: Response) => {
   res.json({ sends });
 });
 
+// The dashboard's "Cross-chain sends" tab was already calling this —
+// there was just no route behind it yet.
+adminRouter.get("/admin/cross-chain-sends", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const chain = typeof req.query.chain === "string" ? req.query.chain : undefined;
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const crossChainSends = await adminRepo.listRecentCrossChainSends(chain, limit);
+  res.json({ crossChainSends });
+});
+
 // A memo-less/unrecognized Stellar deposit was never actually
 // unrecoverable — stellarDepositScanner.ts already tracks it in
 // unmatched_stellar_deposits, this just exposes that table instead of
