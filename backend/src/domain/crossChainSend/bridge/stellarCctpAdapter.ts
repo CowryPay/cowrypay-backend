@@ -1,4 +1,4 @@
-import { CCTPV2BridgingProvider } from "@circle-fin/provider-cctp-v2";
+import { CCTPV2BridgingProvider, isMintFailureRelatedToAttestation } from "@circle-fin/provider-cctp-v2";
 import { parseUnits, getAddress, hexToBytes } from "viem";
 import { Address as StellarAddress } from "@stellar/stellar-sdk";
 import { getAddressEncoder, getAddressDecoder, address as toSolanaAddress } from "@solana/kit";
@@ -222,12 +222,45 @@ async function checkStatusFromStellar(
       recipientAddress: ref.destinationAddress,
     };
 
-    const mintPrepared = (await provider.mint(
-      stellarSourceContext as unknown as Parameters<typeof provider.mint>[0],
-      destinationContext as unknown as Parameters<typeof provider.mint>[1],
-      attestation,
-    )) as Prepared;
-    const mintTxHash = await executePrepared(ref.destinationChain, mintPrepared);
+    // Same attestation-expiry recovery cctpBridge.ts's checkCctpStatus uses
+    // — see its own comment for the full real-incident background
+    // (2026-09-03). Kept here too since this leg calls the exact same
+    // provider.mint()/executePrepared() pair and is exposed to the exact
+    // same MessageExpired risk if a burn sits undetected too long.
+    let mintTxHash: string | null;
+    try {
+      const mintPrepared = (await provider.mint(
+        stellarSourceContext as unknown as Parameters<typeof provider.mint>[0],
+        destinationContext as unknown as Parameters<typeof provider.mint>[1],
+        attestation,
+      )) as Prepared;
+      mintTxHash = await executePrepared(ref.destinationChain, mintPrepared);
+    } catch (err) {
+      if (!isMintFailureRelatedToAttestation(err)) throw err;
+      console.error(
+        `[stellarCctpAdapter] mint failed for Stellar-sourced burn ${ref.burnTxHash} on ${ref.destinationChain} — attestation expired, requesting a fresh one:`,
+        err,
+      );
+      try {
+        const freshAttestation = await provider.reAttest(
+          stellarSourceContext as unknown as Parameters<typeof provider.reAttest>[0],
+          ref.burnTxHash,
+          { maxRetries: 1, timeout: 5_000 },
+        );
+        const retriedMintPrepared = (await provider.mint(
+          stellarSourceContext as unknown as Parameters<typeof provider.mint>[0],
+          destinationContext as unknown as Parameters<typeof provider.mint>[1],
+          freshAttestation,
+        )) as Prepared;
+        mintTxHash = await executePrepared(ref.destinationChain, retriedMintPrepared);
+      } catch (reAttestErr) {
+        console.error(
+          `[stellarCctpAdapter] re-attestation recovery failed for Stellar-sourced burn ${ref.burnTxHash} on ${ref.destinationChain}:`,
+          reAttestErr,
+        );
+        return { phase: "FAILED", detail: "destination_mint_reattest_failed" };
+      }
+    }
     if (!mintTxHash) throw new Error(`receiveMessage returned no transaction hash for ${ref.destinationChain}`);
     return { phase: "DESTINATION_PENDING", destinationTxHash: mintTxHash, detail: "destination_mint_broadcast" };
   }

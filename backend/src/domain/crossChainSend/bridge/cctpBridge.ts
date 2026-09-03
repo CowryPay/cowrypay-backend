@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, http, parseUnits, type Chain } 
 import { createSolanaRpc } from "@solana/kit";
 import { ViemAdapter } from "@circle-fin/adapter-viem-v2";
 import { SolanaKitAdapter } from "@circle-fin/adapter-solana-kit";
-import { CCTPV2BridgingProvider } from "@circle-fin/provider-cctp-v2";
+import { CCTPV2BridgingProvider, isMintFailureRelatedToAttestation } from "@circle-fin/provider-cctp-v2";
 import type { ChainDefinition } from "@circle-fin/bridge-kit";
 import { env } from "../../../config/env.js";
 import { getChainConfig } from "../../wallets/chains.js";
@@ -364,8 +364,49 @@ export async function checkCctpStatus(bridgeReference: Record<string, unknown>):
       return { phase: "ATTESTATION_PENDING" };
     }
 
-    const mintPrepared = await provider.mint(source, destination, attestation);
-    const mintTxHash = await executePrepared(ref.destinationChain, mintPrepared);
+    // Real incident (2026-09-03): the earlier silent-catch bug above let a
+    // burn sit undetected for 24+ hours before its first real mint attempt
+    // — long enough for the attestation to expire under CCTP's own
+    // validity window before the mint ever ran (Anchor error MessageExpired
+    // / EVM's "Message expired and must be re-signed"). This surfaces from
+    // executePrepared (on-chain simulation/execution), not from
+    // provider.mint() itself (which only builds the prepared request) —
+    // both calls are wrapped below for that reason. Circle's SDK has a
+    // documented, purpose-built recovery for exactly this:
+    // provider.reAttest() fetches the expired attestation's nonce, requests
+    // a fresh one, and polls until it's ready.
+    // isMintFailureRelatedToAttestation() is Circle's own detector for this
+    // specific failure shape — used here so only a genuine expiry retries
+    // via reAttest; any other mint failure re-throws immediately, same as
+    // before this change (still ultimately retried by the poller's own
+    // outer catch, unchanged behavior for that case — not something this
+    // fix scopes to solve). One retry only — if reAttest itself fails, or
+    // the retried mint fails again, this returns FAILED directly (not an
+    // uncaught throw) so the poller correctly classifies it as STUCK
+    // (source already confirmed) and alerts ops, instead of silently
+    // retrying the exact same doomed mint forever.
+    let mintTxHash: string | null;
+    try {
+      const mintPrepared = await provider.mint(source, destination, attestation);
+      mintTxHash = await executePrepared(ref.destinationChain, mintPrepared);
+    } catch (err) {
+      if (!isMintFailureRelatedToAttestation(err)) throw err;
+      console.error(
+        `[cctpBridge] mint failed for burn ${ref.burnTxHash} on ${ref.destinationChain} — attestation expired, requesting a fresh one:`,
+        err,
+      );
+      try {
+        const freshAttestation = await provider.reAttest(source, ref.burnTxHash, { maxRetries: 1, timeout: 5_000 });
+        const retriedMintPrepared = await provider.mint(source, destination, freshAttestation);
+        mintTxHash = await executePrepared(ref.destinationChain, retriedMintPrepared);
+      } catch (reAttestErr) {
+        console.error(
+          `[cctpBridge] re-attestation recovery failed for burn ${ref.burnTxHash} on ${ref.destinationChain}:`,
+          reAttestErr,
+        );
+        return { phase: "FAILED", detail: "destination_mint_reattest_failed" };
+      }
+    }
     if (!mintTxHash) throw new Error(`mint returned no transaction hash for ${ref.destinationChain}`);
     return { phase: "DESTINATION_PENDING", destinationTxHash: mintTxHash, detail: "destination_mint_broadcast" };
   }
