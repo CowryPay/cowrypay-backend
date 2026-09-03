@@ -348,7 +348,16 @@ export async function checkCctpStatus(bridgeReference: Record<string, unknown>):
     let attestation: Awaited<ReturnType<typeof provider.fetchAttestation>>;
     try {
       attestation = await provider.fetchAttestation(source, ref.burnTxHash, { maxRetries: 1, timeout: 5_000 });
-    } catch {
+    } catch (err) {
+      // Was previously a silent catch — genuinely can't tell "not ready
+      // yet" (expected, common) apart from "this call is failing outright
+      // every single tick" (a real bug) without logging it. Real incident
+      // (2026-09-03): a Base->Solana send sat in BRIDGING for 24+ hours
+      // while Circle's own API already had a complete attestation ready —
+      // this call was failing every tick for an unknown reason, masked as
+      // ordinary "still pending". Logged, not thrown — still treated as
+      // ATTESTATION_PENDING so a single flaky tick doesn't fail the send.
+      console.error(`[cctpBridge] fetchAttestation failed for burn ${ref.burnTxHash} on ${ref.sourceChain}:`, err);
       return { phase: "ATTESTATION_PENDING" };
     }
     if (attestation.status !== "complete") {

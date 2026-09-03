@@ -196,7 +196,12 @@ async function checkStatusFromStellar(
         ref.burnTxHash,
         { maxRetries: 1, timeout: 5_000 },
       );
-    } catch {
+    } catch (err) {
+      // See cctpBridge.ts's own checkCctpStatus for why this is logged, not
+      // silently swallowed — a real incident there (2026-09-03) sat stuck
+      // for 24+ hours because this exact catch shape gave no way to tell
+      // "not ready yet" apart from "this call is failing every tick".
+      console.error(`[stellarCctpAdapter] fetchAttestation failed for Stellar burn ${ref.burnTxHash}:`, err);
       return { phase: "ATTESTATION_PENDING" };
     }
     if (attestation.status !== "complete") {
@@ -419,7 +424,13 @@ export const stellarCctpAdapter: BridgeAdapter = {
           ref.burnTxHash,
           { maxRetries: 1, timeout: 5_000 },
         );
-      } catch {
+      } catch (err) {
+        // See cctpBridge.ts's own checkCctpStatus for why this is logged,
+        // not silently swallowed — a real incident there (2026-09-03) sat
+        // stuck for 24+ hours because this exact catch shape gave no way
+        // to tell "not ready yet" apart from "this call is failing every
+        // tick".
+        console.error(`[stellarCctpAdapter] fetchAttestation failed for burn ${ref.burnTxHash} on ${ref.sourceChain}:`, err);
         return { phase: "ATTESTATION_PENDING" };
       }
       if (attestation.status !== "complete") {
