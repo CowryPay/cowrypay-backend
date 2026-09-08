@@ -87,8 +87,13 @@ function capitalize(s: string): string {
 
 // Every fiat currency any provider supports right now, for enumerating
 // "what CAN this chain send to" — deliberately NOT limited to whichever
-// currency the user originally asked about.
-const ALL_SUPPORTED_FIAT_CURRENCIES = new Set([
+// currency the user originally asked about. Exported for rateQuery.ts's
+// all-currencies overview — the single authoritative "what do we actually
+// off-ramp to today" set, not a separately maintained list that could
+// drift out of sync (countries.ts's own SUPPORTED_COUNTRIES includes
+// Malawi/MWK, which isn't actually in any of the three providers' sets
+// below — aspirational, not real coverage).
+export const ALL_SUPPORTED_FIAT_CURRENCIES = new Set([
   ...PAYCREST_SUPPORTED_FIAT_CURRENCIES,
   ...QUIDAX_SUPPORTED_FIAT_CURRENCIES,
   ...CENTIIV_SUPPORTED_FIAT_CURRENCIES,
@@ -99,6 +104,23 @@ function chainsSupportingCurrency(fiatCurrency: string): string[] {
     (chain) =>
       isPaycrestEligible(chain, fiatCurrency) || isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency),
   );
+}
+
+// Real gap found live (2026-09-08) building rateQuery.ts's all-currencies
+// table: no single chain reaches every supported currency (TZS is
+// Paycrest-only, and Paycrest doesn't support Stellar/Solana at all — see
+// paycrestAdapter.ts), so quoting a whole table of currencies against one
+// fixed chain silently failed for whichever currencies that chain can't
+// actually reach. Exported so a caller building a multi-currency view can
+// pick a genuinely reachable chain PER currency instead of guessing one
+// chain for everything. preferredChain (e.g. a user-named chainHint, or
+// one they actually hold balance on) is honored only when it's actually
+// eligible for THIS currency — never just assumed eligible because it's
+// eligible for something else.
+export function firstEligibleChainForCurrency(fiatCurrency: string, preferredChain?: string | null): string | null {
+  const eligible = chainsSupportingCurrency(fiatCurrency);
+  if (preferredChain && eligible.includes(preferredChain.toLowerCase())) return preferredChain.toLowerCase();
+  return eligible[0] ?? null;
 }
 
 function currenciesReachableFromChain(chain: string): string[] {

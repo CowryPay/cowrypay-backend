@@ -40,7 +40,7 @@ import {
   type InternalTransferIntent,
 } from "./internalTransferDraft.js";
 import { clearSession, getActiveSession, saveSession, touchSession, type ChatDraftIntent } from "./sessionRepository.js";
-import { resolveRateQuery } from "./rateQuery.js";
+import { resolveRateQuery, resolveAllRatesQuery } from "./rateQuery.js";
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -339,8 +339,15 @@ export async function handleChatMessage(userId: string, message: string): Promis
   }
 
   // Read-only, like the admin actions above — no draft, no PIN, nothing
-  // to confirm.
+  // to confirm. A bare "what's the rate" (no specific currency or amount
+  // named) shows every currency we off-ramp to at once — real feature
+  // request (2026-09-08); naming a currency or amount keeps the single,
+  // targeted lookup instead, since a whole table isn't what "how much is
+  // 50 USDC in naira" is actually asking.
   if (parsed?.kind === "rate") {
+    if (parsed.fiatCurrency == null && parsed.amount == null) {
+      return { reply: await resolveAllRatesQuery(userId, parsed.tokenHint, parsed.chainHint) };
+    }
     return { reply: await resolveRateQuery(userId, parsed) };
   }
 
