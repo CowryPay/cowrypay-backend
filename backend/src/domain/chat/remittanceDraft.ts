@@ -152,39 +152,74 @@ async function finalizeRemittanceDraft(
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
   const walletAddress = wallet.address;
 
-  // Omitted means USDC, the only token that existed before USDT support.
-  const tokenSymbol = tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
-
-  // Balance is tracked per chain (a token on one chain isn't spendable on
-  // another) — resolve which chain this send draws from before locking a
-  // rate. No balance anywhere yet still falls through to wallet.chain as a
-  // reasonable default; the real "not enough funds" error surfaces later,
-  // atomically, at actual debit time (domain/offramp/service.ts) — this is
-  // only about which chain, not whether there's enough there.
+  // Balance is tracked per (chain, token) — resolve which one this send
+  // draws from before locking a rate. No balance anywhere yet still falls
+  // through to wallet.chain/env.defaultTokenSymbol as a reasonable
+  // default; the real "not enough funds" error surfaces later, atomically,
+  // at actual debit time (domain/offramp/service.ts) — this is only about
+  // which (chain, token), not whether there's enough there.
   // A balance row's chain can be null on the shared database in its
   // current (temporarily reverted, post-incident) state — normalized to
   // wallet.chain here so nothing downstream has to guard against it
   // individually (a real null previously crashed the chainHint match below).
   const balances = await ledgerRepo.getBalancesForUser(userId);
-  const fundedChains = balances
-    .filter((b) => b.tokenSymbol === tokenSymbol && Number(b.availableBalance) > 0)
+  const funded = balances
+    .filter((b) => Number(b.availableBalance) > 0)
     .map((b) => ({ ...b, chain: b.chain ?? wallet.chain }));
 
   let chain: string;
-  if (chainHint) {
-    const match = fundedChains.find((b) => b.chain.toLowerCase() === chainHint.toLowerCase());
-    if (!match) {
-      return {
-        ok: false,
-        message: `You don't have a ${tokenSymbol} balance on ${chainHint} to send from.`,
-      };
+  let tokenSymbol: string;
+
+  if (tokenHint) {
+    // Token named explicitly — unchanged from before: only that token's
+    // funded chains are ever considered.
+    tokenSymbol = tokenHint.toUpperCase();
+    const fundedForToken = funded.filter((b) => b.tokenSymbol === tokenSymbol);
+    if (chainHint) {
+      const match = fundedForToken.find((b) => b.chain.toLowerCase() === chainHint.toLowerCase());
+      if (!match) {
+        return { ok: false, message: `You don't have a ${tokenSymbol} balance on ${chainHint} to send from.` };
+      }
+      chain = match.chain;
+    } else if (fundedForToken.length > 1) {
+      const list = fundedForToken.map((b) => `${b.chain} (${formatAmount(b.availableBalance)} ${tokenSymbol})`).join(", ");
+      return { ok: false, message: `Which chain would you like to send from? You have ${tokenSymbol} balance on: ${list}.` };
+    } else {
+      chain = fundedForToken[0]?.chain ?? wallet.chain;
     }
-    chain = match.chain;
-  } else if (fundedChains.length > 1) {
-    const list = fundedChains.map((b) => `${b.chain} (${formatAmount(b.availableBalance)} ${tokenSymbol})`).join(", ");
-    return { ok: false, message: `Which chain would you like to send from? You have balance on: ${list}.` };
   } else {
-    chain = fundedChains[0]?.chain ?? wallet.chain;
+    // Real gap this closes (2026-09-08): no token named used to silently
+    // assume USDC and only ever list/consider USDC-funded chains — a
+    // balance sitting in any OTHER supported token (USDT0, say) never
+    // showed up as an option at all, even when it was the user's only
+    // money on that chain. Now considers every token the user actually
+    // holds, grouped by chain so e.g. Stellar holding both USDC and
+    // USDT0 reads as one line, not two.
+    if (chainHint) {
+      const fundedOnChain = funded.filter((b) => b.chain.toLowerCase() === chainHint.toLowerCase());
+      if (fundedOnChain.length === 0) {
+        return { ok: false, message: `You don't have a balance on ${chainHint} to send from.` };
+      }
+      if (fundedOnChain.length > 1) {
+        const list = fundedOnChain.map((b) => `${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join(", ");
+        return { ok: false, message: `Which token would you like to send from ${chainHint} — you have: ${list}?` };
+      }
+      chain = fundedOnChain[0]!.chain;
+      tokenSymbol = fundedOnChain[0]!.tokenSymbol;
+    } else if (funded.length > 1) {
+      const byChain = new Map<string, typeof funded>();
+      for (const b of funded) byChain.set(b.chain, [...(byChain.get(b.chain) ?? []), b]);
+      const list = [...byChain.entries()]
+        .map(([c, rows]) => `${c} (${rows.map((b) => `${formatAmount(b.availableBalance)} ${b.tokenSymbol}`).join(", ")})`)
+        .join(", ");
+      return { ok: false, message: `Which balance would you like to send from? You have: ${list}.` };
+    } else if (funded.length === 1) {
+      chain = funded[0]!.chain;
+      tokenSymbol = funded[0]!.tokenSymbol;
+    } else {
+      chain = wallet.chain;
+      tokenSymbol = env.defaultTokenSymbol;
+    }
   }
 
   // EVM chains validate token support via chains.ts's token map (e.g. USDT

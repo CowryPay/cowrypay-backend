@@ -79,36 +79,58 @@ export interface ChatResult {
 // Gives the LLM the fields already captured from earlier messages, so a bare
 // follow-up reply like "GTBank" gets recognized as continuing the pending
 // send rather than misread as an unrelated one-off message.
+//
+// Real incident (2026-09-08): "Send 1$ to Carlos" -> asked which chain ->
+// user replied "Stellar" -> misclassified as a brand-new crossChainSend
+// intent (source chain, no amount context) instead of continuing the
+// remittance, surfacing crossChainSendDraft.ts's own $2 minimum error for
+// what should have been a plain $1 remittance. Root cause: this function
+// never included recipientNickname (or chainHint/tokenHint) in the "known"
+// context it hands the LLM, so a bare reply like "Stellar" — genuinely
+// ambiguous on its own between "picking a chain for my pending send" and
+// "starting a cross-chain send" — lost the one piece of context
+// (recipientNickname: "Carlos") that would have anchored it as a
+// remittance. Every field of RemittanceIntent is included now, not just
+// four of the seven.
 function buildFollowUpPrompt(draft: RemittanceIntent, message: string): string {
   const known: string[] = [];
   if (draft.amount != null) known.push(`amount: $${draft.amount}`);
+  if (draft.recipientNickname) known.push(`recipient: ${draft.recipientNickname}`);
   if (draft.countryHint) known.push(`country: ${draft.countryHint}`);
   if (draft.institutionHint) known.push(`provider: ${draft.institutionHint}`);
   if (draft.accountIdentifier) known.push(`account: ${draft.accountIdentifier}`);
+  if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
+  if (draft.tokenHint) known.push(`token: ${draft.tokenHint}`);
   const knownStr = known.length ? `Already known about this pending send: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this send request: "${message}"`;
 }
 
+// Same real incident class as buildFollowUpPrompt above (tokenHint was
+// missing here too) — every field of CryptoWithdrawalIntent included now.
 function buildCryptoWithdrawalFollowUpPrompt(draft: CryptoWithdrawalIntent, message: string): string {
   const known: string[] = [];
-  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.amount != null) known.push(`amount: ${draft.amount} ${draft.tokenHint ?? "USDC"}`);
   if (draft.toAddress) known.push(`destination address: ${draft.toAddress}`);
   if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
   const knownStr = known.length ? `Already known about this pending wallet withdrawal: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this withdrawal request: "${message}"`;
 }
 
+// Same real incident class (tokenHint was missing here too) — every field
+// of InternalTransferIntent included now.
 function buildInternalTransferFollowUpPrompt(draft: InternalTransferIntent, message: string): string {
   const known: string[] = [];
-  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.amount != null) known.push(`amount: ${draft.amount} ${draft.tokenHint ?? "USDC"}`);
   if (draft.recipientMemoId) known.push(`recipient memo: ${draft.recipientMemoId}`);
   const knownStr = known.length ? `Already known about this pending CowryPay-to-CowryPay transfer: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this transfer request: "${message}"`;
 }
 
+// Same real incident class (tokenHint was missing here too) — every field
+// of CrossChainSendIntent included now.
 function buildCrossChainSendFollowUpPrompt(draft: CrossChainSendIntent, message: string): string {
   const known: string[] = [];
-  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.amount != null) known.push(`amount: ${draft.amount} ${draft.tokenHint ?? "USDC"}`);
   if (draft.toAddress) known.push(`destination address: ${draft.toAddress}`);
   if (draft.sourceChainHint) known.push(`source chain: ${draft.sourceChainHint}`);
   if (draft.destinationChainHint) known.push(`destination chain: ${draft.destinationChainHint}`);
