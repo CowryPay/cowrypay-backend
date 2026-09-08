@@ -103,18 +103,23 @@ export async function ingestDeposit(input: {
   return { deposit: existing, alreadyProcessed: true };
 }
 
-// Real incident this closes: ingestDeposit's own fallback path can call
-// this twice for the same deposit if two calls race close enough together
-// (a scanner cycle overrunning its 30s interval — the exact same shape of
-// race already found and fixed in the withdrawal confirmation pollers —
-// or a redelivered webhook). The CAS claim below is what actually makes
-// that safe, not the caller's own state check (which is a plain read, not
-// atomic with the call that follows it): only one concurrent invocation
-// can ever win the DEPOSIT_DETECTED -> DEPOSIT_COMPLIANCE_SCREENING
-// transition, so only one can ever reach the credit at the end. The loser
-// backs off and reports whatever the winner's outcome actually was,
-// instead of independently re-running screening and crediting the ledger
-// a second time.
+// Real incident (2026-09-08): a Base deposit was credited TWICE — this
+// function's own comment used to claim the FIRST CAS below (DEPOSIT_DETECTED
+// -> DEPOSIT_COMPLIANCE_SCREENING) was sufficient on its own ("only one
+// concurrent invocation can ever win [it], so only one can ever reach the
+// credit at the end"). Two concurrent calls (the Blockradar-style webhook
+// path and depositScanner.ts's poller — WALLET_PROVIDER=aws-kms turned out
+// to actually be set in production, despite that file's own now-corrected
+// comment claiming otherwise, so both were live at once) both logged a real
+// screening_started transition for the same deposit 148ms apart, and both
+// then reached the credit below independently — the SECOND transition
+// (DEPOSIT_COMPLIANCE_SCREENING -> BALANCE_CREDITED, where creditAvailable
+// actually runs) was a PLAIN updateState with no CAS guard at all, so
+// nothing stopped both from crediting. Exactly how both calls won the first
+// CAS is still unconfirmed, but it doesn't matter: the money-moving step
+// itself must be independently safe, not resting on an earlier gate holding
+// perfectly. Both transitions are now CAS-guarded — whichever call loses
+// the second one backs off without crediting, same shape as the first.
 async function runScreening(depositId: string): Promise<Deposit> {
   const claimed = await withTransaction(async (client) => {
     const deposit = await depositsRepo.updateStateIfCurrent(
@@ -147,7 +152,8 @@ async function runScreening(depositId: string): Promise<Deposit> {
     const result = await screenDeposit(claimed.amount);
 
     if (!result.clear) {
-      const next = await depositsRepo.updateState(client, depositId, "MANUAL_REVIEW");
+      const next = await depositsRepo.updateStateIfCurrent(client, depositId, "DEPOSIT_COMPLIANCE_SCREENING", "MANUAL_REVIEW");
+      if (!next) return null; // another concurrent call already moved this deposit past SCREENING
       await depositsRepo.logTransition(
         client,
         depositId,
@@ -158,7 +164,11 @@ async function runScreening(depositId: string): Promise<Deposit> {
       return next;
     }
 
-    const next = await depositsRepo.updateState(client, depositId, "BALANCE_CREDITED");
+    // CAS-guarded, unlike the plain updateState this used to be — this is
+    // the actual money-moving step (creditAvailable right below), so it
+    // must be safe on its own, not merely downstream of the first CAS.
+    const next = await depositsRepo.updateStateIfCurrent(client, depositId, "DEPOSIT_COMPLIANCE_SCREENING", "BALANCE_CREDITED");
+    if (!next) return null; // lost the race — another concurrent call already credited this deposit
     await depositsRepo.logTransition(
       client,
       depositId,
@@ -169,6 +179,14 @@ async function runScreening(depositId: string): Promise<Deposit> {
     await ledgerRepo.creditAvailable(client, next.userId, next.tokenSymbol, next.chain, next.amount);
     return next;
   });
+
+  if (!deposit) {
+    // Lost the second race — report the winner's real, current state
+    // instead of a stale/null result.
+    const current = await depositsRepo.findById(depositId);
+    if (!current) throw new Error(`Deposit ${depositId} vanished mid-screening`);
+    return current;
+  }
 
   if (deposit.state === "BALANCE_CREDITED") await triggerSweepAfterCredit(deposit);
   return deposit;

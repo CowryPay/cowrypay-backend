@@ -124,8 +124,15 @@ export async function scanForDeposits(): Promise<void> {
 
 const POLL_INTERVAL_MS = 30_000;
 
-// A complete no-op unless WALLET_PROVIDER=aws-kms is explicitly set — never
-// the case on Railway/production today, so this never runs there.
+// A complete no-op unless WALLET_PROVIDER=aws-kms is explicitly set. This
+// comment used to claim that's never the case on Railway/production — that
+// was stale/wrong (confirmed live 2026-09-08: WALLET_PROVIDER=aws-kms IS
+// set there), and this poller running concurrently with blockradarWebhook.ts
+// against the same deposits was a real contributing factor in a double-
+// credit incident that day — see stateMachine.ts's runScreening for the
+// actual fix (both were always intended to converge safely on ingestDeposit,
+// see this file's own comment above; the gap was a missing CAS guard on the
+// credit step, not this poller running).
 export function startDepositScanner(): void {
   if (env.walletProvider !== "aws-kms") return;
   setInterval(() => {
