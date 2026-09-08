@@ -1,22 +1,16 @@
-import { Asset, Horizon, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Horizon, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 import { stellarMemoRepo } from "./stellarMemoRepository.js";
 import { getStellarSigningKeypair } from "./stellarKms.js";
 import { withAdvisoryLock } from "../../db/advisoryLock.js";
+import { resolveStellarAsset } from "./stellarAssets.js";
 
 function requireStellarDepositAddress(): string {
   if (!env.stellarDepositAddress) {
     throw new Error("STELLAR_DEPOSIT_ADDRESS must be set to create Stellar wallets");
   }
   return env.stellarDepositAddress;
-}
-
-function requireStellarUsdcIssuer(): string {
-  if (!env.stellarUsdcIssuer) {
-    throw new Error("STELLAR_USDC_ISSUER must be set to withdraw Stellar USDC");
-  }
-  return env.stellarUsdcIssuer;
 }
 
 const networkPassphrase = env.stellarNetwork === "public" ? Networks.PUBLIC : Networks.TESTNET;
@@ -67,19 +61,15 @@ export const stellarWalletAdapter: WalletAdapter = {
   // per-user withdraw source, mirroring how deposits land on one shared
   // address rather than a unique one per user.
   async withdraw(input: WithdrawInput): Promise<WithdrawResult> {
-    if (input.tokenSymbol.toUpperCase() !== "USDC") {
-      throw new Error(`stellar withdraw only supports USDC right now (got tokenSymbol=${input.tokenSymbol})`);
-    }
-    const issuer = requireStellarUsdcIssuer();
+    const asset = resolveStellarAsset(input.tokenSymbol);
     const keypair = await getStellarSigningKeypair();
     const server = new Horizon.Server(env.stellarHorizonUrl);
 
     return serialize(() => withAdvisoryLock("stellar-sequence", async () => {
       const account = await server.loadAccount(keypair.publicKey());
-      const usdc = new Asset("USDC", issuer);
 
       const tx = new TransactionBuilder(account, { fee: "10000", networkPassphrase })
-        .addOperation(Operation.payment({ destination: input.toAddress, asset: usdc, amount: input.amount }))
+        .addOperation(Operation.payment({ destination: input.toAddress, asset, amount: input.amount }))
         .setTimeout(30)
         .build();
       tx.sign(keypair);

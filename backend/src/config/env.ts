@@ -184,6 +184,14 @@ export const env = {
   // developers.circle.com/stablecoins/quickstart-transfer-usdc-stellar
   // before ever setting this in production; do not trust a hardcoded value.
   stellarUsdcIssuer: process.env.STELLAR_USDC_ISSUER,
+  // USDT0 (LayerZero OFT, Tether-backed) launched on Stellar 2026-09-02 —
+  // verified live (2026-09-08) against the official usdt0.to/ecosystem/
+  // stellar page, cross-checked against Horizon directly (a real, active,
+  // funded account), before ever being trusted here. Re-verify the same
+  // way before ever changing this value — a wrong issuer here would mean
+  // establishing a trustline to, and crediting deposits of, a worthless
+  // look-alike asset with the same code.
+  stellarUsdt0Issuer: process.env.STELLAR_USDT0_ISSUER,
   // KMS *symmetric* Encrypt/Decrypt key — protects the shared Stellar
   // account's secret seed at rest. Deliberately not the same key/mechanism
   // as awsKmsPayoutKeyArn above: that's an asymmetric Sign-only key (KMS

@@ -24,6 +24,7 @@ import { getSolanaTreasurySigner } from "../wallets/solanaKms.js";
 import { getSolanaMint, SOLANA_TOKEN_DECIMALS } from "../wallets/solanaAdapter.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
+import { identifyStellarToken } from "../wallets/stellarAssets.js";
 
 export interface RefundVerificationResult {
   confirmed: boolean;
@@ -131,10 +132,11 @@ async function verifyEvmRefund(send: Send): Promise<RefundVerificationResult> {
 }
 
 async function verifyStellarRefund(send: Send): Promise<RefundVerificationResult> {
-  if (!env.stellarDepositAddress || !env.stellarUsdcIssuer) return { confirmed: false, txHash: null };
+  if (!env.stellarDepositAddress) return { confirmed: false, txHash: null };
   const server = new Horizon.Server(env.stellarHorizonUrl);
   const expected = expectedNetAmount(send);
   const sinceMs = new Date(send.createdAt).getTime();
+  const wantedSymbol = send.tokenSymbol.toUpperCase();
 
   const page = await server.payments().forAccount(env.stellarDepositAddress).order("desc").limit(50).call();
   for (const op of page.records) {
@@ -149,27 +151,23 @@ async function verifyStellarRefund(send: Send): Promise<RefundVerificationResult
     // Centiiv's refund (tx 5eb2fef8…) landed back at the treasury 67s
     // later via exactly this kind of op, and this function returned
     // { confirmed: false }, so centiivSettlementPoller.ts held it for
-    // manual review instead of crediting the user. Collect every USDC
-    // credit to our address this op represents, from whichever shape.
+    // manual review instead of crediting the user. Collect every credit
+    // to our address, in the send's own token, this op represents, from
+    // whichever shape. identifyStellarToken (not a hardcoded "USDC"
+    // check) is what makes this work for USDT0 refunds too.
     const observedAmounts: number[] = [];
-    if (
-      op.type === "payment" &&
-      op.to === env.stellarDepositAddress &&
-      op.asset_type !== "native" &&
-      op.asset_code === "USDC" &&
-      op.asset_issuer === env.stellarUsdcIssuer
-    ) {
-      observedAmounts.push(Number(op.amount));
+    if (op.type === "payment" && op.to === env.stellarDepositAddress && op.asset_type !== "native") {
+      if (identifyStellarToken(op.asset_code, op.asset_issuer) === wantedSymbol) {
+        observedAmounts.push(Number(op.amount));
+      }
     }
     const balanceChanges =
       (op as { asset_balance_changes?: Array<Record<string, unknown>> }).asset_balance_changes ?? [];
     for (const change of balanceChanges) {
-      if (
-        change.type === "transfer" &&
-        change.to === env.stellarDepositAddress &&
-        change.asset_code === "USDC" &&
-        change.asset_issuer === env.stellarUsdcIssuer
-      ) {
+      if (change.type !== "transfer" || change.to !== env.stellarDepositAddress) continue;
+      const code = typeof change.asset_code === "string" ? change.asset_code : undefined;
+      const issuer = typeof change.asset_issuer === "string" ? change.asset_issuer : undefined;
+      if (identifyStellarToken(code, issuer) === wantedSymbol) {
         observedAmounts.push(Number(change.amount));
       }
     }

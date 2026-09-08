@@ -6,6 +6,7 @@ import { env } from "../../config/env.js";
 import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
 import { getSolanaTreasurySigner } from "../wallets/solanaKms.js";
+import { identifyStellarToken, stellarSupportedTokens } from "../wallets/stellarAssets.js";
 import { ledgerRepo } from "../ledger/repository.js";
 
 const ERC20_BALANCE_ABI = [
@@ -81,18 +82,22 @@ async function evmWithNative(chain: string, address: `0x${string}`, nativeSymbol
 // Stellar stays USDC-only, deliberately — USDT was never added here (see
 // chains.ts's own comment on the Celo/Solana-only scope decision).
 async function stellarBalance(address: string, includeNative: boolean): Promise<WalletBalance> {
-  if (!env.stellarUsdcIssuer) throw new Error("STELLAR_USDC_ISSUER not configured");
   const server = new Horizon.Server(env.stellarHorizonUrl);
   const account = await server.loadAccount(address);
-  const usdcLine = account.balances.find(
-    (b: any) => b.asset_code === "USDC" && b.asset_issuer === env.stellarUsdcIssuer,
-  ) as { balance: string } | undefined;
-  const nativeLine = includeNative ? account.balances.find((b: any) => b.asset_type === "native") : undefined;
+  const tokens: Record<string, string> = {};
+  for (const symbol of stellarSupportedTokens()) tokens[symbol] = "0";
+  for (const b of account.balances as Array<{ asset_type: string; asset_code?: string; asset_issuer?: string; balance: string }>) {
+    const symbol = identifyStellarToken(b.asset_code, b.asset_issuer);
+    if (symbol) tokens[symbol] = b.balance;
+  }
+  const nativeLine = includeNative
+    ? (account.balances as Array<{ asset_type: string; balance: string }>).find((b) => b.asset_type === "native")
+    : undefined;
   return {
     chain: "stellar",
     address,
-    tokens: { USDC: usdcLine?.balance ?? "0" },
-    native: nativeLine ? { symbol: "XLM", amount: (nativeLine as { balance: string }).balance } : null,
+    tokens,
+    native: nativeLine ? { symbol: "XLM", amount: nativeLine.balance } : null,
     error: null,
   };
 }
@@ -227,10 +232,10 @@ function computeReconciliation(
   return rows.sort((a, b) => a.chain.localeCompare(b.chain) || a.tokenSymbol.localeCompare(b.tokenSymbol));
 }
 
-// The only two tokens the platform tracks anywhere — not derived from
+// The only tokens the platform tracks anywhere — not derived from
 // chains.ts's per-chain maps since ledger liability is a global, per-token
 // figure independent of which chains happen to support which token.
-const LEDGER_TOKENS = ["USDC", "USDT"];
+const LEDGER_TOKENS = ["USDC", "USDT", "USDT0"];
 
 export async function getTreasurySnapshot(): Promise<TreasurySnapshot> {
   const evmChains = SUPPORTED_CHAINS.filter((c) => c !== "mock-chain");

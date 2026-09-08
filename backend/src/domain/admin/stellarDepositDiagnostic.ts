@@ -3,6 +3,7 @@ import { env } from "../../config/env.js";
 import { depositsRepo } from "../deposits/repository.js";
 import { unmatchedStellarDepositsRepo } from "../deposits/unmatchedStellarDepositsRepository.js";
 import { stellarCursorRepo } from "../../db/stellarCursorRepository.js";
+import { identifyStellarToken } from "../wallets/stellarAssets.js";
 
 export interface StellarPaymentDiagnostic {
   txHash: string;
@@ -68,7 +69,7 @@ export async function diagnoseStellarDeposits(lookback = 100): Promise<StellarDe
   const payments: StellarPaymentDiagnostic[] = [];
   for (const op of page.records) {
     if (op.type !== "payment" || (op as any).to !== env.stellarDepositAddress) continue;
-    if ((op as any).asset_type === "native" || (op as any).asset_code !== "USDC") continue;
+    if ((op as any).asset_type === "native" || !identifyStellarToken((op as any).asset_code, (op as any).asset_issuer)) continue;
 
     const tx = await (op as any).transaction();
     const [deposit, unmatched] = await Promise.all([

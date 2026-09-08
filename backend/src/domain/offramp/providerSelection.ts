@@ -3,6 +3,7 @@ import { getOfframpRate as getQuidaxRate, quidaxNetworkFor, QUIDAX_SUPPORTED_FIA
 import { getOfframpRate as getCentiivRate, centiivNetworkFor, CENTIIV_SUPPORTED_FIAT_CURRENCIES } from "./centiivAdapter.js";
 import { getTokenConfig } from "../wallets/chains.js";
 import { getSolanaMint } from "../wallets/solanaAdapter.js";
+import { stellarSupportedTokens } from "../wallets/stellarAssets.js";
 
 export { isPaycrestEligible };
 
@@ -60,10 +61,11 @@ function isTokenSupportedOnChain(chain: string, token: string): boolean {
     }
   }
   if (c === "stellar") {
-    // Stellar never got USDT support (out of scope — see chains.ts's own
-    // comment on the Celo/Solana-only decision); its adapter is still
-    // hardcoded to a single USDC trustline.
-    return token.toUpperCase() === "USDC";
+    // USDC always; USDT0 (LayerZero OFT, launched on Stellar 2026-09-02)
+    // as of 2026-09-08 — see stellarAssets.ts for the actual registry.
+    // Stellar's classic USDT (not USDT0) never got support here — a
+    // structurally different asset, out of scope.
+    return stellarSupportedTokens().includes(token.toUpperCase());
   }
   try {
     getTokenConfig(c, token);

@@ -5,6 +5,7 @@ import { walletsRepo } from "../wallets/repository.js";
 import { stellarMemoRepo } from "../wallets/stellarMemoRepository.js";
 import { unmatchedStellarDepositsRepo } from "./unmatchedStellarDepositsRepository.js";
 import { ingestDeposit } from "./stateMachine.js";
+import { identifyStellarToken } from "../wallets/stellarAssets.js";
 
 const PAGE_SIZE = 50;
 
@@ -73,9 +74,10 @@ export async function scanStellarDeposits(): Promise<void> {
         lastToken = op.paging_token;
         continue;
       }
-      if (op.asset_type === "native" || op.asset_code !== "USDC" || op.asset_issuer !== env.stellarUsdcIssuer) {
-        // Not USDC (native XLM, or some other asset/issuer) — out of scope
-        // per the current USDC-only decision. Cursor still advances past it
+      const tokenSymbol = op.asset_type === "native" ? null : identifyStellarToken(op.asset_code, op.asset_issuer);
+      if (!tokenSymbol) {
+        // Native XLM, or some asset/issuer we don't recognize (see
+        // stellarAssets.ts) — out of scope. Cursor still advances past it
         // so it's never re-checked.
         lastToken = op.paging_token;
         continue;
@@ -113,7 +115,7 @@ export async function scanStellarDeposits(): Promise<void> {
       await ingestDeposit({
         userId: match.userId,
         walletId: wallet.id,
-        tokenSymbol: "USDC",
+        tokenSymbol,
         amount: op.amount,
         chain: "stellar",
         txHash: op.transaction_hash,
