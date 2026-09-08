@@ -158,6 +158,15 @@ async function initiateFromStellar(input: BridgeInitiateInput): Promise<BridgeIn
   // auth is checked, which is our own signing keypair (the same account
   // that signs this transaction, so its require_auth() is satisfied by the
   // normal source-account signature, no extra auth entry needed).
+  // deposit_for_burn internally does transfer_from(caller, tokenMessengerMinter,
+  // amount) on the USDC SAC to pull the burn amount — requires a live SEP-41
+  // allowance from our treasury to the TokenMessengerMinter contract, or this
+  // fails live with HostError(Contract, #9) "not enough allowance to spend"
+  // (hit 2026-09-08, right after the caller-param fix above). Set up as a
+  // one-off (scripts/approve-stellar-cctp-allowance.ts), NOT approved inline
+  // per-call here — see that script's own comment for why an inline
+  // approve-then-burn is a real race against this codebase's broadcast-then-
+  // poll architecture. Approved through ~2027-03-01; needs renewal before then.
   const callerKeypair = await getStellarSigningKeypair();
   const submitted = await submitStellarContractCall(contracts.tokenMessengerMinter, "deposit_for_burn", [
     nativeToScVal(callerKeypair.publicKey(), { type: "address" }),
