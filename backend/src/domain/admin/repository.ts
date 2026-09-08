@@ -734,6 +734,32 @@ export const adminRepo = {
     }));
   },
 
+  // Persisted "already alerted" state for doubleCreditMonitor.ts — real
+  // incident (2026-09-08): the original in-memory Set this replaced reset
+  // on every deploy, and findDoubleCreditedDeposits' underlying signal (a
+  // deposit with >1 BALANCE_CREDITED transition, scanned from permanent
+  // history) never stops being true once it's true, even after the
+  // balance is manually corrected — so every deploy's first 5-minute check
+  // re-"discovered" every already-known, already-fixed deposit as new and
+  // re-alerted on Telegram, forever. See migration 0021's own comment.
+  async filterUnalertedDoubleCredits(depositIds: string[]): Promise<string[]> {
+    if (depositIds.length === 0) return [];
+    const { rows } = await pool.query(
+      `select deposit_id from double_credit_alerts where deposit_id = any($1::uuid[])`,
+      [depositIds],
+    );
+    const alreadyAlerted = new Set(rows.map((r) => r.deposit_id));
+    return depositIds.filter((id) => !alreadyAlerted.has(id));
+  },
+
+  async markDoubleCreditsAlerted(depositIds: string[]): Promise<void> {
+    if (depositIds.length === 0) return;
+    await pool.query(
+      `insert into double_credit_alerts (deposit_id) select unnest($1::uuid[]) on conflict (deposit_id) do nothing`,
+      [depositIds],
+    );
+  },
+
   // Read-only export for ops use (e.g. a one-off product-update or
   // feedback-request email) — deliberately just id/email/createdAt, not a
   // general "dump the users table" endpoint.
