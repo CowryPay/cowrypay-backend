@@ -164,9 +164,17 @@ export class NoOfframpRateError extends Error {}
 // minimum of 0.5 for this rail").
 const HTTP_WRAPPER_PREFIX = /^\w[\w -]* request failed \([^)]*\):\s*/;
 
-function describeProviderError(provider: OfframpProvider, err: unknown): string {
+// Real gap found live (2026-09-08): the user-facing rate/remittance
+// messages never named a provider anywhere else in this codebase — every
+// other reply is provider-agnostic by design — but this one leaked
+// "Centiiv: Amount is below the minimum..." straight into a chat reply,
+// the only place a vendor name reached a user. provider is kept on this
+// return value for server-side logging only (see selectOfframpProvider's
+// own console.error below) — never folded into anything thrown or
+// returned to a caller that might show it to a user.
+function describeProviderError(provider: OfframpProvider, err: unknown): { provider: OfframpProvider; reason: string } {
   const message = err instanceof Error ? err.message : String(err);
-  return `${capitalize(provider)}: ${message.replace(HTTP_WRAPPER_PREFIX, "")}`;
+  return { provider, reason: message.replace(HTTP_WRAPPER_PREFIX, "") };
 }
 
 export async function selectOfframpProvider(params: {
@@ -189,7 +197,7 @@ export async function selectOfframpProvider(params: {
     throw new Error(explainNoProviderMessage(params.chain, params.fiatCurrency));
   }
 
-  const errors: string[] = [];
+  const errors: { provider: OfframpProvider; reason: string }[] = [];
 
   const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain, params.fiatCurrency)
     ? getPaycrestRate({
@@ -231,9 +239,17 @@ export async function selectOfframpProvider(params: {
     // At least one provider was eligible for this exact chain/currency
     // pair (checked above) and genuinely attempted a quote — so the route
     // itself is real. Surface what actually went wrong instead of the
-    // generic "isn't supported" claim, which would be false here.
+    // generic "isn't supported" claim, which would be false here — but
+    // never which vendor said it (see describeProviderError's own
+    // comment): full detail (provider names included) goes to the server
+    // log for debugging, only the bare reasons reach the thrown message
+    // that can end up in a chat reply.
+    console.error(
+      `[offramp] no provider could quote ${params.amount} ${token} from ${params.chain} to ${params.fiatCurrency}:`,
+      errors.map((e) => `${e.provider}: ${e.reason}`).join(" | "),
+    );
     throw new NoOfframpRateError(
-      `Couldn't get a rate for ${params.amount} ${token} from ${capitalize(params.chain)} to ${params.fiatCurrency.toUpperCase()} right now (${errors.join("; ")}).`,
+      `Couldn't get a rate for ${params.amount} ${token} from ${capitalize(params.chain)} to ${params.fiatCurrency.toUpperCase()} right now (${errors.map((e) => e.reason).join("; ")}).`,
     );
   }
   return quotes.reduce((best, q) => (Number(q.toAmount) > Number(best.toAmount) ? q : best));

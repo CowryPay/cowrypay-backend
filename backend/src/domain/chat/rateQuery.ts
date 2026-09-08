@@ -11,10 +11,6 @@ export type RateQueryIntent = Extract<ParsedIntent, { kind: "rate" }>;
 // other flows' unnamed fields.
 const DEFAULT_FIAT_CURRENCY = "NGN";
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
 // Read-only — no draft, no session, nothing to confirm or PIN-gate. Reuses
 // the exact same selectOfframpProvider every real remittance quote goes
 // through (see providerSelection.ts), so "what's the rate" can never show
@@ -49,14 +45,18 @@ export async function resolveRateQuery(userId: string, intent: RateQueryIntent):
     return `Couldn't get a live rate for ${tokenSymbol} to ${fiatCurrency} on ${chain} right now (${err instanceof Error ? err.message : String(err)}).`;
   }
 
+  // provider (which vendor's own rail actually won the quote) is
+  // deliberately never shown to the user — real gap found live
+  // (2026-09-08): this used to say "via Centiiv", the only place in this
+  // codebase a payment provider's name ever reached a chat reply. Every
+  // other user-facing message here is provider-agnostic by design.
   const toAmountNum = Number(selection.toAmount);
   const perUnitRate = toAmountNum / Number(amount);
   const rateStr = perUnitRate.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  const providerLabel = capitalize(selection.provider);
 
   if (namedAmount) {
     const totalStr = toAmountNum.toLocaleString(undefined, { maximumFractionDigits: 2 });
-    return `${intent.amount} ${tokenSymbol} ≈ ${totalStr} ${fiatCurrency} right now (via ${providerLabel}) — that's about ${rateStr} ${fiatCurrency} per ${tokenSymbol}. Rates move with the market; this is a live quote, not fixed.`;
+    return `${intent.amount} ${tokenSymbol} ≈ ${totalStr} ${fiatCurrency} right now — that's about ${rateStr} ${fiatCurrency} per ${tokenSymbol}. Rates move with the market; this is a live quote, not fixed.`;
   }
-  return `1 ${tokenSymbol} ≈ ${rateStr} ${fiatCurrency} right now (via ${providerLabel}). Rates move with the market; this is a live quote, not fixed.`;
+  return `1 ${tokenSymbol} ≈ ${rateStr} ${fiatCurrency} right now. Rates move with the market; this is a live quote, not fixed.`;
 }
