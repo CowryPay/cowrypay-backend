@@ -146,18 +146,21 @@ async function initiateFromStellar(input: BridgeInitiateInput): Promise<BridgeIn
   const contracts = getStellarCctpContracts();
   const amountBaseUnits = parseUnits(input.amount, STELLAR_USDC_DECIMALS).toString();
 
-  // deposit_for_burn's exact Soroban parameter names/order are PREDICTED
-  // by analogy to Circle's documented EVM CCTPv2 depositForBurn interface
-  // (converted to Soroban/snake_case) — NOT live-verified against the
-  // deployed contract's real spec, since this codebase had no outbound
-  // network access to Stellar's RPC when this was written (see the plan
-  // doc). Soroban's simulate-before-submit model inside
-  // submitStellarContractCall's server.prepareTransaction call fails
-  // cleanly here with no funds at risk if a param name/type is wrong —
-  // MUST be verified against contract.Client.from()'s real on-chain spec
-  // (same technique already used for mint_and_forward) before this ever
-  // handles real funds.
+  // deposit_for_burn's params were originally predicted by analogy to
+  // Circle's EVM interface and failed live (2026-09-08) with HostError
+  // UnexpectedSize / MismatchingParameterLen — 7 args passed, contract
+  // expects 8. Now pulled from the REAL deployed spec (fetched live via
+  // contract.Client.from() against this exact contractId, not guessed):
+  // deposit_for_burn(caller: Address, amount: i128, destination_domain: u32,
+  // mint_recipient: BytesN, burn_token: Address, destination_caller: BytesN,
+  // max_fee: i128, min_finality_threshold: u32). The leading `caller` was
+  // missing entirely — it's the account whose USDC is being burned/whose
+  // auth is checked, which is our own signing keypair (the same account
+  // that signs this transaction, so its require_auth() is satisfied by the
+  // normal source-account signature, no extra auth entry needed).
+  const callerKeypair = await getStellarSigningKeypair();
   const submitted = await submitStellarContractCall(contracts.tokenMessengerMinter, "deposit_for_burn", [
+    nativeToScVal(callerKeypair.publicKey(), { type: "address" }),
     nativeToScVal(BigInt(amountBaseUnits), { type: "i128" }),
     nativeToScVal(destinationDomain, { type: "u32" }),
     nativeToScVal(mintRecipientBytes32, { type: "bytes" }),
