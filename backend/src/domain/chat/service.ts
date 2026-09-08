@@ -77,6 +77,19 @@ export interface ChatResult {
   pendingInternalTransfer?: InternalTransferDraft;
 }
 
+// Real incident (2026-09-08): "what's the rate" asked while a Nigeria
+// remittance draft was pending inherited "country: Nigeria" from the
+// "already known" context below and got classified as a rate check
+// SCOPED to NGN specifically (fiatCurrency: "NGN") — reasonable-looking,
+// but it meant the new all-currencies table (rateQuery.ts's
+// resolveAllRatesQuery, which only fires when the parsed intent names NO
+// specific currency) never fired; the user got one currency instead of
+// the table they actually asked for. A rate check is never a
+// continuation of anything — appended to every follow-up prompt below so
+// the LLM stops trying to fold pending-draft context into it.
+const RATE_CHECK_CARVE_OUT =
+  ` If this new message is a standalone rate check (e.g. "what's the rate", "rate?"), classify it as kind "rate" using ONLY fields the user explicitly names in THIS message — never inherit country/currency/chain/token from the pending request above for a rate check.`;
+
 // Gives the LLM the fields already captured from earlier messages, so a bare
 // follow-up reply like "GTBank" gets recognized as continuing the pending
 // send rather than misread as an unrelated one-off message.
@@ -104,7 +117,7 @@ function buildFollowUpPrompt(draft: RemittanceIntent, message: string): string {
   if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
   if (draft.tokenHint) known.push(`token: ${draft.tokenHint}`);
   const knownStr = known.length ? `Already known about this pending send: ${known.join(", ")}. ` : "";
-  return `${knownStr}The user's new message, possibly continuing this send request: "${message}"`;
+  return `${knownStr}${RATE_CHECK_CARVE_OUT}The user's new message, possibly continuing this send request: "${message}"`;
 }
 
 // Same real incident class as buildFollowUpPrompt above (tokenHint was
@@ -115,7 +128,7 @@ function buildCryptoWithdrawalFollowUpPrompt(draft: CryptoWithdrawalIntent, mess
   if (draft.toAddress) known.push(`destination address: ${draft.toAddress}`);
   if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
   const knownStr = known.length ? `Already known about this pending wallet withdrawal: ${known.join(", ")}. ` : "";
-  return `${knownStr}The user's new message, possibly continuing this withdrawal request: "${message}"`;
+  return `${knownStr}${RATE_CHECK_CARVE_OUT}The user's new message, possibly continuing this withdrawal request: "${message}"`;
 }
 
 // Same real incident class (tokenHint was missing here too) — every field
@@ -125,7 +138,7 @@ function buildInternalTransferFollowUpPrompt(draft: InternalTransferIntent, mess
   if (draft.amount != null) known.push(`amount: ${draft.amount} ${draft.tokenHint ?? "USDC"}`);
   if (draft.recipientMemoId) known.push(`recipient memo: ${draft.recipientMemoId}`);
   const knownStr = known.length ? `Already known about this pending CowryPay-to-CowryPay transfer: ${known.join(", ")}. ` : "";
-  return `${knownStr}The user's new message, possibly continuing this transfer request: "${message}"`;
+  return `${knownStr}${RATE_CHECK_CARVE_OUT}The user's new message, possibly continuing this transfer request: "${message}"`;
 }
 
 // Same real incident class (tokenHint was missing here too) — every field
@@ -137,7 +150,7 @@ function buildCrossChainSendFollowUpPrompt(draft: CrossChainSendIntent, message:
   if (draft.sourceChainHint) known.push(`source chain: ${draft.sourceChainHint}`);
   if (draft.destinationChainHint) known.push(`destination chain: ${draft.destinationChainHint}`);
   const knownStr = known.length ? `Already known about this pending cross-chain send: ${known.join(", ")}. ` : "";
-  return `${knownStr}The user's new message, possibly continuing this cross-chain send request: "${message}"`;
+  return `${knownStr}${RATE_CHECK_CARVE_OUT}The user's new message, possibly continuing this cross-chain send request: "${message}"`;
 }
 
 export async function handleChatMessage(userId: string, message: string): Promise<ChatResult> {
