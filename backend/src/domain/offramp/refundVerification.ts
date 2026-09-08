@@ -138,10 +138,43 @@ async function verifyStellarRefund(send: Send): Promise<RefundVerificationResult
 
   const page = await server.payments().forAccount(env.stellarDepositAddress).order("desc").limit(50).call();
   for (const op of page.records) {
-    if (op.type !== "payment" || op.to !== env.stellarDepositAddress) continue;
-    if (op.asset_type === "native" || op.asset_code !== "USDC" || op.asset_issuer !== env.stellarUsdcIssuer) continue;
     if (new Date(op.created_at).getTime() < sinceMs) break; // newest-first — once before the send, nothing older can match
-    if (amountsMatch(Number(op.amount), expected)) {
+
+    // Horizon's /payments returns classic `payment` ops AND Soroban
+    // `invoke_host_function` ops that moved a token. Centiiv's Stellar
+    // refunds are the latter — an `execute_refund_transfer` contract call
+    // whose transfer details live in `asset_balance_changes`, not on the
+    // op itself — so a `op.type === "payment"` check silently misses every
+    // one of them. Real incident: a send paid out 2026-09-08 08:35:44Z,
+    // Centiiv's refund (tx 5eb2fef8…) landed back at the treasury 67s
+    // later via exactly this kind of op, and this function returned
+    // { confirmed: false }, so centiivSettlementPoller.ts held it for
+    // manual review instead of crediting the user. Collect every USDC
+    // credit to our address this op represents, from whichever shape.
+    const observedAmounts: number[] = [];
+    if (
+      op.type === "payment" &&
+      op.to === env.stellarDepositAddress &&
+      op.asset_type !== "native" &&
+      op.asset_code === "USDC" &&
+      op.asset_issuer === env.stellarUsdcIssuer
+    ) {
+      observedAmounts.push(Number(op.amount));
+    }
+    const balanceChanges =
+      (op as { asset_balance_changes?: Array<Record<string, unknown>> }).asset_balance_changes ?? [];
+    for (const change of balanceChanges) {
+      if (
+        change.type === "transfer" &&
+        change.to === env.stellarDepositAddress &&
+        change.asset_code === "USDC" &&
+        change.asset_issuer === env.stellarUsdcIssuer
+      ) {
+        observedAmounts.push(Number(change.amount));
+      }
+    }
+
+    if (observedAmounts.some((amount) => amountsMatch(amount, expected))) {
       return { confirmed: true, txHash: op.transaction_hash };
     }
   }
