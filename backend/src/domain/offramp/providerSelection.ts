@@ -112,15 +112,26 @@ function chainsSupportingCurrency(fiatCurrency: string): string[] {
 // paycrestAdapter.ts), so quoting a whole table of currencies against one
 // fixed chain silently failed for whichever currencies that chain can't
 // actually reach. Exported so a caller building a multi-currency view can
-// pick a genuinely reachable chain PER currency instead of guessing one
-// chain for everything. preferredChain (e.g. a user-named chainHint, or
-// one they actually hold balance on) is honored only when it's actually
-// eligible for THIS currency — never just assumed eligible because it's
-// eligible for something else.
-export function firstEligibleChainForCurrency(fiatCurrency: string, preferredChain?: string | null): string | null {
+// pick chains that are genuinely eligible for a given currency instead of
+// guessing one chain for everything. preferredChain (e.g. a user-named
+// chainHint, or one they actually hold balance on) is sorted first when
+// it's actually eligible for THIS currency — never just assumed eligible
+// because it's eligible for something else — but every other eligible
+// chain is still returned after it.
+//
+// Returns the FULL ordered list, not just one chain — second real gap
+// found live the same day: "eligible" here is a static fact (does this
+// chain/currency pair have a provider that COULD serve it), not a live
+// health check. UGX/Stellar is eligible on paper (Centiiv supports both)
+// but Centiiv's own API can be down for that specific pair while UGX/Base
+// (Paycrest) works fine — a caller trying only the first eligible chain
+// gives up on a currency an alternate chain could actually still quote.
+// See rateQuery.ts's own fallback loop.
+export function eligibleChainsForCurrency(fiatCurrency: string, preferredChain?: string | null): string[] {
   const eligible = chainsSupportingCurrency(fiatCurrency);
-  if (preferredChain && eligible.includes(preferredChain.toLowerCase())) return preferredChain.toLowerCase();
-  return eligible[0] ?? null;
+  const preferred = preferredChain?.toLowerCase();
+  if (!preferred || !eligible.includes(preferred)) return eligible;
+  return [preferred, ...eligible.filter((c) => c !== preferred)];
 }
 
 function currenciesReachableFromChain(chain: string): string[] {
