@@ -34,6 +34,7 @@ import { stellarWalletRouter } from "./routes/stellarWallet.js";
 import { solanaWalletRouter } from "./routes/solanaWallet.js";
 import { solanaWebhookRouter } from "./routes/solanaWebhook.js";
 import { cryptoWithdrawalsRouter } from "./routes/cryptoWithdrawals.js";
+import { internalTransfersRouter } from "./routes/internalTransfers.js";
 import { crossChainSendsRouter } from "./routes/crossChainSends.js";
 import { campaignsRouter } from "./routes/campaigns.js";
 import { startWithdrawConfirmationPoller } from "./domain/offramp/withdrawConfirmationPoller.js";
@@ -89,6 +90,7 @@ app.use(solanaWalletRouter);
 app.use(solanaWebhookRouter);
 app.use(adminRouter);
 app.use(cryptoWithdrawalsRouter);
+app.use(internalTransfersRouter);
 app.use(crossChainSendsRouter);
 app.use(campaignsRouter);
 

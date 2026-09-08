@@ -33,6 +33,12 @@ import {
   type CrossChainSendDraft,
   type CrossChainSendIntent,
 } from "./crossChainSendDraft.js";
+import {
+  mergeInternalTransferDrafts,
+  resolveInternalTransferIntent,
+  type InternalTransferDraft,
+  type InternalTransferIntent,
+} from "./internalTransferDraft.js";
 import { clearSession, getActiveSession, saveSession, touchSession, type ChatDraftIntent } from "./sessionRepository.js";
 
 function capitalize(s: string): string {
@@ -62,6 +68,12 @@ export interface ChatResult {
   // chains and the exact address back to the user before collecting the
   // PIN and submitting to POST /cross-chain-sends itself.
   pendingCrossChainSend?: CrossChainSendDraft;
+  // Same §9 boundary, fourth money-moving flow — CowryPay-to-CowryPay on
+  // Stellar, identified by memo rather than an address (see
+  // internalTransferDraft.ts's own comment). The frontend must show the
+  // recipient memo back to the user before collecting the PIN and
+  // submitting to POST /internal-transfers/stellar itself.
+  pendingInternalTransfer?: InternalTransferDraft;
 }
 
 // Gives the LLM the fields already captured from earlier messages, so a bare
@@ -84,6 +96,14 @@ function buildCryptoWithdrawalFollowUpPrompt(draft: CryptoWithdrawalIntent, mess
   if (draft.chainHint) known.push(`chain: ${draft.chainHint}`);
   const knownStr = known.length ? `Already known about this pending wallet withdrawal: ${known.join(", ")}. ` : "";
   return `${knownStr}The user's new message, possibly continuing this withdrawal request: "${message}"`;
+}
+
+function buildInternalTransferFollowUpPrompt(draft: InternalTransferIntent, message: string): string {
+  const known: string[] = [];
+  if (draft.amount != null) known.push(`amount: ${draft.amount} USDC`);
+  if (draft.recipientMemoId) known.push(`recipient memo: ${draft.recipientMemoId}`);
+  const knownStr = known.length ? `Already known about this pending CowryPay-to-CowryPay transfer: ${known.join(", ")}. ` : "";
+  return `${knownStr}The user's new message, possibly continuing this transfer request: "${message}"`;
 }
 
 function buildCrossChainSendFollowUpPrompt(draft: CrossChainSendIntent, message: string): string {
@@ -213,7 +233,9 @@ export async function handleChatMessage(userId: string, message: string): Promis
       ? buildFollowUpPrompt(activeDraft, message)
       : activeDraft.kind === "cryptoWithdrawal"
         ? buildCryptoWithdrawalFollowUpPrompt(activeDraft, message)
-        : buildCrossChainSendFollowUpPrompt(activeDraft, message);
+        : activeDraft.kind === "internalTransfer"
+          ? buildInternalTransferFollowUpPrompt(activeDraft, message)
+          : buildCrossChainSendFollowUpPrompt(activeDraft, message);
   // Real incident this closes: GROQ_MODEL pointed at a model Groq had
   // fully decommissioned, and this catch swallowed every resulting
   // failure silently — chat kept working (degrading to the free-form
@@ -242,6 +264,17 @@ export async function handleChatMessage(userId: string, message: string): Promis
     if (resolution.ok) {
       await clearSession(userId);
       return { reply: resolution.summary, pendingCryptoWithdrawal: resolution.draft };
+    }
+    await saveSession(userId, merged);
+    return { reply: resolution.message };
+  }
+
+  if (parsed?.kind === "internalTransfer") {
+    const merged = activeDraft?.kind === "internalTransfer" ? mergeInternalTransferDrafts(activeDraft, parsed) : parsed;
+    const resolution = await resolveInternalTransferIntent(userId, merged);
+    if (resolution.ok) {
+      await clearSession(userId);
+      return { reply: resolution.summary, pendingInternalTransfer: resolution.draft };
     }
     await saveSession(userId, merged);
     return { reply: resolution.message };

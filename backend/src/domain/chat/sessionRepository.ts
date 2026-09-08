@@ -3,12 +3,13 @@ import { env } from "../../config/env.js";
 import type { RemittanceIntent } from "./remittanceDraft.js";
 import type { CryptoWithdrawalIntent } from "./cryptoWithdrawalDraft.js";
 import type { CrossChainSendIntent } from "./crossChainSendDraft.js";
+import type { InternalTransferIntent } from "./internalTransferDraft.js";
 
 // A session holds whichever multi-turn draft is in progress — a
 // remittance send, a same-chain crypto withdrawal, or a cross-chain send
 // — never more than one at once. The JSON column itself needed no
 // migration to support this; only the TS type widened.
-export type ChatDraftIntent = RemittanceIntent | CryptoWithdrawalIntent | CrossChainSendIntent;
+export type ChatDraftIntent = RemittanceIntent | CryptoWithdrawalIntent | CrossChainSendIntent | InternalTransferIntent;
 
 // Expiry is enforced here, lazily, at read time — not by a cleanup job. An
 // idle draft older than CHAT_SESSION_IDLE_MINUTES is simply treated as gone;

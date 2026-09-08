@@ -154,6 +154,24 @@ export interface CryptoWithdrawalStateTransition {
   createdAt: string;
 }
 
+// CowryPay-to-CowryPay transfer, identified by the recipient's memo — a
+// pure ledger movement, never touching a blockchain. No state field: this
+// row only ever gets created once the debit+credit has already happened
+// atomically (see internalTransfers/service.ts) — there's no pending or
+// failed state to represent, unlike every fund-moving flow above that has
+// a real async external step in between.
+export interface InternalTransfer {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  chain: string;
+  tokenSymbol: string;
+  amountHuman: string;
+  recipientIdentifier: string;
+  reference: string;
+  createdAt: string;
+}
+
 // Cross-chain send: source chain's ledger is debited, a real bridge (CCTP
 // today) moves the value, the destination chain pays out — see
 // domain/crossChainSend/. STUCK is the one state with no analog in

@@ -84,6 +84,22 @@ export async function initiateCryptoWithdrawal(
     throw new Error(`"${input.toAddress}" is not a valid address for ${input.chain}`);
   }
 
+  // Real incident (2026-09-08): a user, wanting to send Stellar USDC to
+  // another CowryPay user, withdrew straight to our own shared Stellar
+  // deposit address with no memo — a natural mistake given Stellar's
+  // omnibus model means every CowryPay user's own "address" IS this same
+  // address, but the payment landed back in our treasury, correctly
+  // unattributable, needing a manual admin resolve. Blocked here as
+  // defense-in-depth regardless of how a request reaches this function
+  // (chat misclassification, a direct API call) — the real fix is
+  // internalTransfers/service.ts (send by memo instead), which this
+  // error points to.
+  if (input.chain.toLowerCase() === "stellar" && env.stellarDepositAddress && input.toAddress === env.stellarDepositAddress) {
+    throw new Error(
+      "That's CowryPay's own shared Stellar address, not an external wallet — sending here can't reach anyone specific. To send to another CowryPay user, use their memo instead (ask them for their CowryPay memo, then say \"send to memo <number>\").",
+    );
+  }
+
   const tokenSymbol = input.tokenSymbol ?? env.defaultTokenSymbol;
   // Stellar/Solana validate their own token support inside the adapter;
   // EVM chains are validated here up front via chains.ts's token map (e.g.

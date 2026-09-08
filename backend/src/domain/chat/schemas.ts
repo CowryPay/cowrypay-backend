@@ -66,6 +66,22 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     destinationChainHint: z.string().optional(),
     tokenHint: z.string().optional(),
   }),
+  // CowryPay-to-CowryPay transfer, identified by the recipient's memo, not
+  // an address — see domain/internalTransfers/service.ts's own comment for
+  // the real incident this exists to prevent. Same §9 boundary as every
+  // other fund-moving intent above: chat only ever builds a draft
+  // (domain/chat/internalTransferDraft.ts), the real transfer goes through
+  // the PIN-gated POST /internal-transfers/stellar endpoint. Stellar-only
+  // for now — every other chain already gives each user their own real
+  // address, so a normal cryptoWithdrawal already works correctly for
+  // "send to another CowryPay user" there.
+  z.object({
+    kind: z.literal("internalTransfer"),
+    action: z.literal("SEND_TO_COWRYPAY_USER"),
+    amount: z.number().optional(),
+    recipientMemoId: z.string().optional(),
+    tokenHint: z.string().optional(),
+  }),
   z.object({
     kind: z.literal("unknown"),
     rawSummary: z.string(),
