@@ -138,7 +138,37 @@ export function explainNoProviderMessage(chain: string, fiatCurrency: string): s
 // the user more fiat. A provider erroring out (rate-limited, momentarily
 // down, amount too small for their liquidity) is treated as "not
 // available this round," not a hard failure — the others still get a
-// chance to fill the order. Only throws when none can.
+// chance to fill the order. Only throws when none can — and even then,
+// distinguishes WHY: no provider was ever eligible for this chain/currency
+// pair at all (explainNoProviderMessage's job) versus at least one
+// provider WAS eligible and genuinely tried, but rejected the request for
+// a real reason (amount below their minimum, momentarily down, etc.) —
+// see this function's own real incident below for why collapsing those
+// two into one generic message is actively misleading, not just vague.
+export class NoOfframpRateError extends Error {}
+
+// Real incident this closes (2026-09-08): a USDT0-on-Stellar->NGN request
+// below Centiiv's real 0.5 rail minimum surfaced as "Sending from Stellar
+// to NGN isn't supported right now" — false; the route works fine, the
+// amount was just too small. That happened because every provider promise
+// below discarded its real rejection reason (.catch(() => null)) and the
+// caller (remittanceDraft.ts) had no way to tell "route genuinely
+// unsupported" apart from "route supported, this specific request failed."
+// Strips each adapter's own HTTP-wrapper framing (centiivAdapter.ts's
+// `Centiiv request failed (400 /public/quote): <real message>`, and
+// similar shapes elsewhere) down to the actual, user-meaningful reason —
+// this text can end up directly in a chat reply (see remittanceDraft.ts's
+// noRateReason), and a raw status-code-and-path wrapper reads as an
+// internal error, not an explanation, even though the real message after
+// the colon is often perfectly clear on its own ("Amount is below the
+// minimum of 0.5 for this rail").
+const HTTP_WRAPPER_PREFIX = /^\w[\w -]* request failed \([^)]*\):\s*/;
+
+function describeProviderError(provider: OfframpProvider, err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return `${capitalize(provider)}: ${message.replace(HTTP_WRAPPER_PREFIX, "")}`;
+}
+
 export async function selectOfframpProvider(params: {
   chain: string;
   amount: string;
@@ -150,6 +180,17 @@ export async function selectOfframpProvider(params: {
   if (!isTokenSupportedOnChain(params.chain, token)) {
     throw new Error(`${token} isn't supported on ${params.chain} yet.`);
   }
+
+  const anyEligible =
+    isPaycrestEligible(params.chain, params.fiatCurrency) ||
+    isQuidaxEligible(params.chain, params.fiatCurrency) ||
+    isCentiivEligible(params.chain, params.fiatCurrency);
+  if (!anyEligible) {
+    throw new Error(explainNoProviderMessage(params.chain, params.fiatCurrency));
+  }
+
+  const errors: string[] = [];
+
   const paycrestPromise: Promise<ProviderQuote | null> = isPaycrestEligible(params.chain, params.fiatCurrency)
     ? getPaycrestRate({
         network: params.chain,
@@ -158,19 +199,28 @@ export async function selectOfframpProvider(params: {
         fiatCurrency: params.fiatCurrency,
       })
         .then((q) => ({ provider: "paycrest" as const, toAmount: (Number(params.amount) * Number(q.rate)).toString() }))
-        .catch(() => null)
+        .catch((err) => {
+          errors.push(describeProviderError("paycrest", err));
+          return null;
+        })
     : Promise.resolve(null);
 
   const quidaxPromise: Promise<ProviderQuote | null> = isQuidaxEligible(params.chain, params.fiatCurrency)
     ? getQuidaxRate({ network: params.chain, token, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "quidax" as const, toAmount: q.toAmount }))
-        .catch(() => null)
+        .catch((err) => {
+          errors.push(describeProviderError("quidax", err));
+          return null;
+        })
     : Promise.resolve(null);
 
   const centiivPromise: Promise<ProviderQuote | null> = isCentiivEligible(params.chain, params.fiatCurrency)
     ? getCentiivRate({ network: params.chain, token, amount: params.amount, fiatCurrency: params.fiatCurrency })
         .then((q) => ({ provider: "centiiv" as const, toAmount: q.estimatedReceivableAmount }))
-        .catch(() => null)
+        .catch((err) => {
+          errors.push(describeProviderError("centiiv", err));
+          return null;
+        })
     : Promise.resolve(null);
 
   const quotes = (await Promise.all([paycrestPromise, quidaxPromise, centiivPromise])).filter(
@@ -178,7 +228,13 @@ export async function selectOfframpProvider(params: {
   );
 
   if (quotes.length === 0) {
-    throw new Error(explainNoProviderMessage(params.chain, params.fiatCurrency));
+    // At least one provider was eligible for this exact chain/currency
+    // pair (checked above) and genuinely attempted a quote — so the route
+    // itself is real. Surface what actually went wrong instead of the
+    // generic "isn't supported" claim, which would be false here.
+    throw new NoOfframpRateError(
+      `Couldn't get a rate for ${params.amount} ${token} from ${capitalize(params.chain)} to ${params.fiatCurrency.toUpperCase()} right now (${errors.join("; ")}).`,
+    );
   }
   return quotes.reduce((best, q) => (Number(q.toAmount) > Number(best.toAmount) ? q : best));
 }

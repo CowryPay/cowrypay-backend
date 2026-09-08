@@ -31,6 +31,7 @@ import {
   isCentiivEligible,
   isPaycrestEligible,
   explainNoProviderMessage,
+  NoOfframpRateError,
   type OfframpProvider,
 } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
@@ -237,6 +238,13 @@ async function finalizeRemittanceDraft(
   let finalRecipient: SendRecipient = recipient;
   let altRecipient: { institution: string; accountIdentifier: string; accountName: string; network?: string } | null =
     null;
+  // Set only for NoOfframpRateError — a real provider genuinely tried and
+  // rejected this specific request (amount below their minimum, etc.), as
+  // opposed to any other error caught below (an institution-list fetch
+  // failing, say) where falling back to explainNoProviderMessage's generic
+  // "isn't supported" framing is still the right call. See
+  // providerSelection.ts's own comment for the incident this closes.
+  let noRateReason: string | null = null;
 
   if (isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency)) {
     try {
@@ -313,6 +321,7 @@ async function finalizeRemittanceDraft(
       // Alt provider unavailable this round (rate lookup or institution
       // list failed) — fall back to Paycrest below, same as always.
       console.log(`[remittance-draft] alt provider lookup failed for ${chain}:`, err instanceof Error ? err.message : err);
+      if (err instanceof NoOfframpRateError) noRateReason = err.message;
     }
   }
 
@@ -327,7 +336,12 @@ async function finalizeRemittanceDraft(
   // failing, not "the default was never valid to begin with").
   if (provider === "paycrest" && !isPaycrestEligible(chain, fiatCurrency)) {
     console.log(`[remittance-draft] no eligible provider for ${chain}/${fiatCurrency} after selection — defaulted to paycrest, which isn't eligible.`);
-    return { ok: false, message: explainNoProviderMessage(chain, fiatCurrency) };
+    // noRateReason (set only for NoOfframpRateError) means a real provider
+    // WAS eligible and genuinely tried this exact request — explainNoProvider
+    // Message's "isn't supported" framing would be false in that case (see
+    // its own real-incident comment: a too-small USDT0-on-Stellar amount
+    // showed "Stellar to NGN isn't supported", when the route works fine).
+    return { ok: false, message: noRateReason ?? explainNoProviderMessage(chain, fiatCurrency) };
   }
 
   async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {
