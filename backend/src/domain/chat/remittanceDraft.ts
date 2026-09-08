@@ -95,7 +95,13 @@ export function mergeRemittanceDrafts(existing: RemittanceIntent, incoming: Remi
   return {
     kind: "remittance",
     action: "SEND_REMITTANCE",
-    amount: incoming.amount ?? existing.amount,
+    // If the incoming message names amount OR fiatAmount, that's the
+    // user's current intent about how much — the OTHER one is cleared
+    // rather than carried forward stale, so a later "actually make it $30"
+    // can't end up merged against a leftover fiatAmount from two messages
+    // ago (or vice versa) and silently resolved against the wrong one.
+    amount: incoming.amount ?? (incoming.fiatAmount != null ? undefined : existing.amount),
+    fiatAmount: incoming.fiatAmount ?? (incoming.amount != null ? undefined : existing.fiatAmount),
     recipientNickname: incoming.recipientNickname ?? existing.recipientNickname,
     countryHint: incoming.countryHint ?? existing.countryHint,
     institutionHint: incoming.institutionHint ?? existing.institutionHint,
@@ -520,12 +526,78 @@ async function finalizeRemittanceDraft(
 // receive address, which POST /offramp/sends reuses on confirm instead of
 // creating a second, redundant order. This never calls initiateSend itself:
 // chat only ever gets to *propose*, never to *execute*.
+// Converts a fiat-denominated target ("₦50,000") into the crypto amount
+// that needs debiting to actually land there — real gap this closes
+// (2026-09-08): every off-ramp provider integrated here (Paycrest/Quidax/
+// Centiiv) only ever quotes forward, crypto-in fiat-out, never "how much
+// crypto for this exact fiat figure" — so there's no single API call that
+// answers this directly. Approach: a real benchmark quote (not a static/
+// hardcoded conversion table, which would drift from the truth
+// immediately) gives a live per-unit rate, inverted here by simple
+// division/scaling — genuinely approximate (a real quote at the ACTUAL
+// computed amount can differ slightly, since some providers' rates aren't
+// perfectly linear across amounts — Centiiv's own 0.5 minimum being one
+// example of non-linearity at the low end), which is exactly why this
+// value only ever seeds intent.amount for the SAME real quote flow every
+// other remittance already goes through (finalizeRemittanceDraft's own
+// selectOfframpProvider call) — the final numbers shown to the user are
+// always a real, live quote, never this estimate alone.
+async function resolveFiatAmountToCrypto(
+  userId: string,
+  fiatAmount: number,
+  fiatCurrency: string,
+  chainHint?: string,
+  tokenHint?: string,
+): Promise<{ ok: true; amount: number } | { ok: false; message: string }> {
+  const tokenSymbol = tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
+
+  // Prefers a chain the user actually holds this token on, so the
+  // benchmark quote reflects a rate they can actually reach — falls back
+  // to env.defaultChain only for a first-time sender with nothing funded
+  // yet (finalizeRemittanceDraft's own chain resolution is what actually
+  // matters for the real send; this is only ever an estimate).
+  let chain = chainHint?.toLowerCase();
+  if (!chain) {
+    const balances = await ledgerRepo.getBalancesForUser(userId);
+    const funded = balances.find((b) => b.tokenSymbol === tokenSymbol && Number(b.availableBalance) > 0);
+    chain = funded?.chain ?? env.defaultChain;
+  }
+
+  const BENCHMARK_AMOUNT = "10";
+  let selection;
+  try {
+    selection = await selectOfframpProvider({ chain, token: tokenSymbol, amount: BENCHMARK_AMOUNT, fiatCurrency });
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  const rate = Number(selection.toAmount) / Number(BENCHMARK_AMOUNT); // fiat per 1 crypto unit
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return {
+      ok: false,
+      message: `Couldn't resolve a live rate for ${tokenSymbol} to ${fiatCurrency} right now — try naming an amount in ${tokenSymbol} instead.`,
+    };
+  }
+
+  // fiatAmount is what the recipient should receive, net of everything —
+  // CowryPay's own fee (computeFeeSplit) comes off the top of what the
+  // user is debited, so the gross crypto amount is scaled back up to make
+  // the NET conversion land on the target fiat figure. Mirrors
+  // computeFeeSplit's own math in reverse.
+  const netCryptoNeeded = fiatAmount / rate;
+  const grossCryptoNeeded = netCryptoNeeded / (1 - env.remittanceFeeBps / 10_000);
+
+  return { ok: true, amount: Math.round(grossCryptoNeeded * 1_000_000) / 1_000_000 };
+}
+
 export async function resolveRemittanceIntent(
   userId: string,
   intent: RemittanceIntent,
 ): Promise<RemittanceResolution> {
-  if (intent.amount == null || intent.amount <= 0) {
-    return { ok: false, message: `How much would you like to send? e.g. "send $50 to a bank account in Nigeria".` };
+  if ((intent.amount == null || intent.amount <= 0) && (intent.fiatAmount == null || intent.fiatAmount <= 0)) {
+    return {
+      ok: false,
+      message: `How much would you like to send? e.g. "send $50 to a bank account in Nigeria" or "send ₦50,000 to a bank account in Nigeria".`,
+    };
   }
 
   // A saved recipient (e.g. "mom") skips country/institution/account
@@ -573,9 +645,23 @@ export async function resolveRemittanceIntent(
         accountName: saved.accountName,
         memo: saved.nickname,
       };
+
+      let cryptoAmount = intent.amount;
+      if (cryptoAmount == null && intent.fiatAmount != null) {
+        const converted = await resolveFiatAmountToCrypto(
+          userId,
+          intent.fiatAmount,
+          saved.fiatCurrency,
+          intent.chainHint,
+          intent.tokenHint,
+        );
+        if (!converted.ok) return converted;
+        cryptoAmount = converted.amount;
+      }
+
       return finalizeRemittanceDraft(
         userId,
-        intent.amount,
+        cryptoAmount!,
         saved.fiatCurrency,
         ` (${saved.institutionName})`,
         recipient,
@@ -661,9 +747,22 @@ export async function resolveRemittanceIntent(
     ...(nicknameForMemo ? { memo: nicknameForMemo } : {}),
   };
 
+  let cryptoAmount = intent.amount;
+  if (cryptoAmount == null && intent.fiatAmount != null) {
+    const converted = await resolveFiatAmountToCrypto(
+      userId,
+      intent.fiatAmount,
+      country.currencyCode,
+      intent.chainHint,
+      intent.tokenHint,
+    );
+    if (!converted.ok) return converted;
+    cryptoAmount = converted.amount;
+  }
+
   return finalizeRemittanceDraft(
     userId,
-    intent.amount,
+    cryptoAmount!,
     country.currencyCode,
     ` (${matched.name}) in ${country.name}`,
     recipient,

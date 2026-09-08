@@ -10,7 +10,16 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("remittance"),
     action: z.literal("SEND_REMITTANCE"),
+    // Exactly one of amount/fiatAmount is ever meaningful for a given
+    // message — amount when the user names a crypto-ish figure ("$50",
+    // "20 USDC"), fiatAmount when they name a local-currency figure they
+    // want the RECIPIENT to end up with ("₦50,000", "50000 naira"). See
+    // remittanceDraft.ts's resolveFiatAmountToCrypto for how fiatAmount
+    // gets converted — needs a resolved fiatCurrency (from countryHint or
+    // a saved recipient) before it can, so it's held as-is until then,
+    // same as every other field here.
     amount: z.number().optional(),
+    fiatAmount: z.number().optional(),
     recipientNickname: z.string().optional(),
     countryHint: z.string().optional(),
     institutionHint: z.string().optional(),
@@ -26,6 +35,20 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("admin"),
     action: z.enum(["BALANCE", "TX_HISTORY", "HELP", "CHAT"]),
+  }),
+  // Read-only rate lookup — no draft, no session, nothing to confirm.
+  // See domain/chat/rateQuery.ts.
+  z.object({
+    kind: z.literal("rate"),
+    action: z.literal("CHECK_RATE"),
+    fiatCurrency: z.string().optional(),
+    tokenHint: z.string().optional(),
+    chainHint: z.string().optional(),
+    // An amount to quote at, if named ("rate for 50 USDC to NGN") — a
+    // provider's per-unit rate can shift slightly with size (fee floors,
+    // liquidity), so quoting at the user's own real amount beats always
+    // showing a fixed benchmark figure when they gave one.
+    amount: z.number().optional(),
   }),
   // Revisited from an earlier, stricter design (recognized-but-not-
   // fulfilled) once the real safety property was identified: the risk

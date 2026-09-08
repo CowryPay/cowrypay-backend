@@ -40,6 +40,7 @@ import {
   type InternalTransferIntent,
 } from "./internalTransferDraft.js";
 import { clearSession, getActiveSession, saveSession, touchSession, type ChatDraftIntent } from "./sessionRepository.js";
+import { resolveRateQuery } from "./rateQuery.js";
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -95,6 +96,7 @@ export interface ChatResult {
 function buildFollowUpPrompt(draft: RemittanceIntent, message: string): string {
   const known: string[] = [];
   if (draft.amount != null) known.push(`amount: $${draft.amount}`);
+  if (draft.fiatAmount != null) known.push(`amount: ${draft.fiatAmount} (local currency)`);
   if (draft.recipientNickname) known.push(`recipient: ${draft.recipientNickname}`);
   if (draft.countryHint) known.push(`country: ${draft.countryHint}`);
   if (draft.institutionHint) known.push(`provider: ${draft.institutionHint}`);
@@ -334,6 +336,12 @@ export async function handleChatMessage(userId: string, message: string): Promis
       return { reply: buildHelpMessage() };
     }
     // action === "CHAT" falls through to the conversational reply below.
+  }
+
+  // Read-only, like the admin actions above — no draft, no PIN, nothing
+  // to confirm.
+  if (parsed?.kind === "rate") {
+    return { reply: await resolveRateQuery(userId, parsed) };
   }
 
   // Genuinely unmatched (or parser unavailable/errored) — free-form reply.
