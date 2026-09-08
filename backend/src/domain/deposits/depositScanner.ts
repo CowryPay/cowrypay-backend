@@ -5,6 +5,7 @@ import { walletsRepo } from "../wallets/repository.js";
 import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
 import type { Wallet } from "../../types.js";
 import { ingestDeposit } from "./stateMachine.js";
+import { withAdvisoryLock } from "../../db/advisoryLock.js";
 
 const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
@@ -109,17 +110,34 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
 // (one KMS key derives one address valid on all of them — see chains.ts),
 // and feeds them into the exact same crediting path a webhook would
 // (ingestDeposit), rather than a parallel one.
+// Wrapped in the same withAdvisoryLock mechanism stellarDepositScanner.ts's
+// own scanStellarDeposits() now uses, for the identical reason — see that
+// file's own comment for the real incident (two valid deposits silently
+// vanished — no deposits row, no fallback row anywhere) this class of bug
+// caused there. This scanner has the exact same shape of risk: a batch's
+// cursor only advances past what fully succeeded
+// (chainScanCursorRepo.setCursor below), so two concurrent instances
+// (Railway pinned to 1 replica, but never enforced — see advisoryLock.ts's
+// own comment) racing on the same chain's cursor could let one instance's
+// transient per-log failure be masked by another's success advancing the
+// cursor past it, with that log never retried and never recorded. Not yet
+// confirmed to have actually happened here (unlike the Stellar incident),
+// but the mechanism is identical and this poller is confirmed actually
+// running in production (WALLET_PROVIDER=aws-kms) — closed proactively
+// rather than waiting for a matching incident on this path too.
 export async function scanForDeposits(): Promise<void> {
   const wallets = await walletsRepo.listByProvider("aws-kms");
   if (wallets.length === 0) return;
 
-  for (const chain of SUPPORTED_CHAINS) {
-    try {
-      await scanChain(chain, wallets);
-    } catch (err) {
-      console.error(`[deposit-scanner] failed to scan ${chain}:`, err);
+  await withAdvisoryLock("evm-deposit-scan", async () => {
+    for (const chain of SUPPORTED_CHAINS) {
+      try {
+        await scanChain(chain, wallets);
+      } catch (err) {
+        console.error(`[deposit-scanner] failed to scan ${chain}:`, err);
+      }
     }
-  }
+  });
 }
 
 const POLL_INTERVAL_MS = 30_000;
