@@ -1,5 +1,5 @@
 import { env } from "../../config/env.js";
-import type { WalletAdapter } from "./adapter.js";
+import type { WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 import { blockradarWalletAdapter } from "./blockradarAdapter.js";
 import { mockWalletAdapter } from "./mockAdapter.js";
 import { awsKmsWalletAdapter } from "./awsKmsAdapter.js";
@@ -41,4 +41,39 @@ export function getWalletAdapter(chain: string, explicitProvider?: string): Wall
     default:
       throw new Error(`Unknown wallet provider: ${provider}`);
   }
+}
+
+// Real incident (2026-09-08): a Solana fee sweep (offramp/service.ts) hit
+// solanaAdapter.ts's own "Solana transaction expired before confirmation
+// (blockhash no longer valid)" — that message only fires after
+// confirmByPolling already rebroadcast for the full ~60-90s blockhash
+// window and it still never landed, so a single naive retry wouldn't
+// help; what does is building a genuinely fresh transaction (new
+// blockhash) and trying again. Same root cause and same fix shape already
+// proven for a different call site — stellarCctpAdapter.ts's own
+// MAX_BURN_ATTEMPTS loop for a dropped Solana-sourced CCTP burn — but
+// that fix lived inside one specific adapter method, not something the
+// THREE separate fee-sweep call sites (offramp/service.ts,
+// crossChainSend/service.ts, cryptoWithdrawals/service.ts — all sharing
+// this exact "best-effort withdraw(), catch, log fee_sweep_failed" shape)
+// could reuse. Centralized here instead of copied three times. Confirmed
+// live (via stellarCctpAdapter.ts's own investigation) that a dropped
+// Solana tx never touches chain state, so retrying from scratch is safe —
+// matched narrowly on this exact message, not a blanket retry-on-any-
+// error, so a real revert or validation failure still surfaces
+// immediately instead of being retried pointlessly.
+const SOLANA_DROPPED_TX_MESSAGE = /expired before confirmation/i;
+const MAX_WITHDRAW_ATTEMPTS = 3;
+
+export async function withdrawWithDroppedTxRetry(adapter: WalletAdapter, input: WithdrawInput): Promise<WithdrawResult> {
+  for (let attempt = 1; attempt <= MAX_WITHDRAW_ATTEMPTS; attempt++) {
+    try {
+      return await adapter.withdraw(input);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!SOLANA_DROPPED_TX_MESSAGE.test(message) || attempt === MAX_WITHDRAW_ATTEMPTS) throw err;
+      console.log(`[withdraw-retry] dropped tx on attempt ${attempt}/${MAX_WITHDRAW_ATTEMPTS} for ${input.chain} withdraw (ref ${input.reference}), retrying with a fresh transaction:`, message);
+    }
+  }
+  throw new Error("unreachable");
 }

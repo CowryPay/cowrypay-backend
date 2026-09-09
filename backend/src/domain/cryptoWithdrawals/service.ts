@@ -5,7 +5,7 @@ import { env } from "../../config/env.js";
 import type { CryptoWithdrawal } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { getWalletAdapter } from "../wallets/index.js";
+import { getWalletAdapter, withdrawWithDroppedTxRetry } from "../wallets/index.js";
 import { PayoutLiquidityError } from "../wallets/adapter.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
@@ -264,7 +264,7 @@ export async function initiateCryptoWithdrawal(
   // than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await getWalletAdapter(input.chain, wallet.provider).withdraw({
+      const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(input.chain, wallet.provider), {
         chain: input.chain,
         tokenSymbol,
         toAddress: treasuryAddress,

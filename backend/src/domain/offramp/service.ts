@@ -5,7 +5,7 @@ import { lockedOrdersRepo } from "./lockedOrdersRepository.js";
 import type { Send, SendRecipient } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { getWalletAdapter } from "../wallets/index.js";
+import { getWalletAdapter, withdrawWithDroppedTxRetry } from "../wallets/index.js";
 import { PayoutLiquidityError } from "../wallets/adapter.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
@@ -506,7 +506,7 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   // rather than thrown.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await getWalletAdapter(chain, wallet.provider).withdraw({
+      const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(chain, wallet.provider), {
         chain,
         tokenSymbol,
         toAddress: treasuryAddress,

@@ -5,7 +5,7 @@ import { env } from "../../config/env.js";
 import type { CrossChainSend } from "../../types.js";
 import { usersRepo } from "../users/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
-import { getWalletAdapter } from "../wallets/index.js";
+import { getWalletAdapter, withdrawWithDroppedTxRetry } from "../wallets/index.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
@@ -268,7 +268,7 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   // outcomes, mirroring those two flows exactly.
   if (Number(feeAmount) > 0) {
     try {
-      const feeSweep = await getWalletAdapter(input.sourceChain, wallet.provider).withdraw({
+      const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(input.sourceChain, wallet.provider), {
         chain: input.sourceChain,
         tokenSymbol,
         toAddress: treasuryAddress,
