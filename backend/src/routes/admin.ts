@@ -17,6 +17,7 @@ import { ledgerRepo } from "../domain/ledger/repository.js";
 import { depositsRepo } from "../domain/deposits/repository.js";
 import { reconcileSolanaWebhookAddresses } from "../domain/monitoring/solanaWebhookReconciler.js";
 import { crossChainSendsRepo } from "../domain/crossChainSend/repository.js";
+import { getWalletAdapter, withdrawWithDroppedTxRetry } from "../domain/wallets/index.js";
 
 export const adminRouter = Router();
 
@@ -220,6 +221,67 @@ adminRouter.get("/admin/sends/:id", async (req: Request, res: Response) => {
     ledgerRepo.getBalancesForUser(send.userId),
   ]);
   res.json({ send, transitions, userBalances });
+});
+
+// Real gap this closes (2026-09-09): a "Sweep failed" row on the admin
+// dashboard's own Sends page had no way to actually retry — the fee
+// itself is small (CowryPay's own revenue, never the user's money; their
+// payout already succeeded before this ever runs) but "check by hand,
+// reconcile manually" doesn't scale past the first few. Reuses the exact
+// same withdraw + logTransition shape offramp/service.ts's own fee-sweep
+// step already uses (now with the dropped-tx retry fix — see
+// wallets/index.ts's withdrawWithDroppedTxRetry), just re-triggerable
+// on demand instead of only ever running once, inline, at send time.
+// Re-derives everything from the send row itself (chain, tokenSymbol,
+// treasuryAddress, feeAmount, reference) rather than trusting request
+// input for anything money-shaped.
+adminRouter.post("/admin/sends/:id/retry-fee-sweep", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const send = await sendsRepo.findById(req.params.id);
+  if (!send) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (!send.feeAmount || Number(send.feeAmount) <= 0) {
+    res.status(400).json({ error: "this send has no fee to sweep" });
+    return;
+  }
+  if (!send.treasuryAddress) {
+    res.status(400).json({ error: "this send has no treasury address recorded" });
+    return;
+  }
+  const wallet = await walletsRepo.findByUserIdAndChain(send.userId, send.chain);
+  if (!wallet) {
+    res.status(400).json({ error: `no ${send.chain} wallet found for this send's user` });
+    return;
+  }
+
+  try {
+    const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(send.chain, wallet.provider), {
+      chain: send.chain,
+      tokenSymbol: send.tokenSymbol,
+      toAddress: send.treasuryAddress,
+      amount: send.feeAmount,
+      reference: `${send.reference}-fee`,
+    });
+    await withTransaction((client) =>
+      sendsRepo.logTransition(
+        client,
+        send.id,
+        send.state,
+        send.state,
+        feeSweep.txHash ? `fee_swept:${feeSweep.txHash}` : "fee_swept_pending_screening",
+        "admin-manual-retry",
+      ),
+    );
+    res.json({ ok: true, feeSweep });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await withTransaction((client) =>
+      sendsRepo.logTransition(client, send.id, send.state, send.state, `fee_sweep_failed: ${message}`, "admin-manual-retry"),
+    );
+    res.status(502).json({ error: message });
+  }
 });
 
 // Same shape of gap as /admin/sends/:id above, for deposits: a Stellar
