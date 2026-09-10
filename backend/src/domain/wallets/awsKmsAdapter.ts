@@ -56,12 +56,31 @@ export function addressFromRawPoint(point: Uint8Array): `0x${string}` {
   return `0x${Buffer.from(hash.slice(-20)).toString("hex")}`;
 }
 
+// A KMS asymmetric SIGN_VERIFY key's public key is immutable for the life
+// of the key — AWS only supports automatic rotation for symmetric
+// encryption keys; "rotating" an asymmetric key means a new key with a
+// new ARN. So the address derived from GetPublicKey is a pure function of
+// the key id, safe to memoize for the process's lifetime. Motivation:
+// this was being re-fetched on every gas-monitor tick, every settlement-
+// poller cycle, every deposit-sweep trigger, every admin treasury-page
+// load, every withdrawal — thousands of identical KMS GetPublicKey calls
+// a week for a value that never changes (hit ~86% of the KMS free tier in
+// 10 days). Same shape of cache stellarKms.ts / solanaKms.ts already use
+// for their own KMS-backed values. Only ever populated on a SUCCESSFUL
+// fetch — a failure caches nothing and the next call retries.
+const addressCache = new Map<string, `0x${string}`>();
+
 async function fetchAddressForKey(client: KMSClient, keyId: string): Promise<`0x${string}`> {
+  const cached = addressCache.get(keyId);
+  if (cached) return cached;
+
   const pub = await client.send(new GetPublicKeyCommand({ KeyId: keyId }));
   if (!pub.PublicKey) {
     throw new Error("KMS GetPublicKey did not return a public key");
   }
-  return addressFromRawPoint(rawPointFromDerSpki(pub.PublicKey));
+  const address = addressFromRawPoint(rawPointFromDerSpki(pub.PublicKey));
+  addressCache.set(keyId, address);
+  return address;
 }
 
 // Public wrapper around fetchAddressForKey — depositSweeper.ts needs the
