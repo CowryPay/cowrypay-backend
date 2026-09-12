@@ -1,4 +1,4 @@
-import { Horizon, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Horizon, Memo, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { env } from "../../config/env.js";
 import type { CreatedWallet, WalletAdapter, WithdrawInput, WithdrawResult } from "./adapter.js";
 import { stellarMemoRepo } from "./stellarMemoRepository.js";
@@ -39,6 +39,28 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+// Stellar's u64 MEMO_ID ceiling — an out-of-range numeric memo can't be
+// expressed at all, so it's checked here rather than left to whatever
+// error the SDK/network would surface for it.
+const MAX_MEMO_ID = 18446744073709551615n;
+
+// A numeric string becomes MEMO_ID (what exchanges/CowryPay's own deposit
+// flow actually use), anything else becomes MEMO_TEXT (28-byte UTF-8
+// limit — Memo.text itself throws a clear error if it doesn't fit, no
+// need to duplicate that check here). Mirrors stellarDepositScanner.ts's
+// own resolveMemoId's "numeric string -> id" rule, just for the outgoing
+// side instead of incoming.
+export function buildStellarMemo(memo: string): Memo {
+  if (/^\d+$/.test(memo)) {
+    const asBigInt = BigInt(memo);
+    if (asBigInt > MAX_MEMO_ID) {
+      throw new Error(`Memo "${memo}" is too large for a Stellar MEMO_ID (max ${MAX_MEMO_ID}) — use a shorter numeric memo, or a text memo instead.`);
+    }
+    return Memo.id(memo);
+  }
+  return Memo.text(memo);
+}
+
 function extractHorizonErrorDetail(err: unknown): string {
   const resultCodes = (err as { response?: { data?: { extras?: { result_codes?: unknown } } } })?.response?.data
     ?.extras?.result_codes;
@@ -65,13 +87,18 @@ export const stellarWalletAdapter: WalletAdapter = {
     const keypair = await getStellarSigningKeypair();
     const server = new Horizon.Server(env.stellarHorizonUrl);
 
+    // Built and validated BEFORE loadAccount/withAdvisoryLock below — a bad
+    // memo should fail fast, not after already holding the sequence lock.
+    const memo = input.memo ? buildStellarMemo(input.memo) : undefined;
+
     return serialize(() => withAdvisoryLock("stellar-sequence", async () => {
       const account = await server.loadAccount(keypair.publicKey());
 
-      const tx = new TransactionBuilder(account, { fee: "10000", networkPassphrase })
+      const builder = new TransactionBuilder(account, { fee: "10000", networkPassphrase })
         .addOperation(Operation.payment({ destination: input.toAddress, asset, amount: input.amount }))
-        .setTimeout(30)
-        .build();
+        .setTimeout(30);
+      if (memo) builder.addMemo(memo);
+      const tx = builder.build();
       tx.sign(keypair);
 
       try {

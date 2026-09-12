@@ -27,6 +27,12 @@ export interface InitiateCryptoWithdrawalInput {
   // so every caller that hasn't been updated (old frontend, direct API use)
   // keeps working exactly as before.
   tokenSymbol?: string;
+  // Stellar-only — see WithdrawInput's own comment for why this exists
+  // (a shared/omnibus destination, e.g. an exchange deposit address,
+  // needs a memo to attribute the payment). Rejected outright for any
+  // other chain below rather than silently ignored, so a caller doesn't
+  // think a memo was attached when it wasn't.
+  memo?: string;
 }
 
 // Which wallet ROW this withdrawal dispatches through — mirrors
@@ -100,6 +106,13 @@ export async function initiateCryptoWithdrawal(
     );
   }
 
+  // A memo only means something on Stellar (see WithdrawInput's own
+  // comment) — rejected outright for any other chain rather than silently
+  // dropped, so a caller can't believe it was attached when it wasn't.
+  if (input.memo && input.chain.toLowerCase() !== "stellar") {
+    throw new Error(`A memo isn't applicable on ${input.chain} — it's a Stellar-specific concept.`);
+  }
+
   const tokenSymbol = input.tokenSymbol ?? env.defaultTokenSymbol;
   // Stellar/Solana validate their own token support inside the adapter;
   // EVM chains are validated here up front via chains.ts's token map (e.g.
@@ -146,6 +159,7 @@ export async function initiateCryptoWithdrawal(
       treasuryAddress,
       provider: wallet.provider,
       reference,
+      memo: input.memo,
     });
     await cryptoWithdrawalsRepo.logTransition(client, created.id, null, "PENDING", "withdrawal_requested");
     return created;
@@ -209,6 +223,7 @@ export async function initiateCryptoWithdrawal(
       toAddress: input.toAddress,
       amount: netAmount,
       reference,
+      memo: input.memo,
     });
   } catch (err) {
     await withTransaction(async (client) => {

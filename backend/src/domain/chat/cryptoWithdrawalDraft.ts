@@ -4,6 +4,7 @@ import { isAddress as isSolanaAddress } from "@solana/kit";
 import { walletsRepo } from "../wallets/repository.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { isValidAddressForChain } from "../cryptoWithdrawals/addressValidation.js";
+import { buildStellarMemo } from "../wallets/stellarAdapter.js";
 import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
 import { computeCryptoWithdrawalFeeSplit } from "../offramp/fee.js";
 import { SUPPORTED_CHAINS as EVM_CHAINS, getTokenConfig } from "../wallets/chains.js";
@@ -22,6 +23,9 @@ export interface CryptoWithdrawalDraft {
   toAddress: string;
   chain: string;
   tokenSymbol: string;
+  // Stellar-only — see WithdrawInput's own comment (domain/wallets/
+  // adapter.ts) for why this exists.
+  memo?: string;
 }
 
 export type CryptoWithdrawalIntent = Extract<ParsedIntent, { kind: "cryptoWithdrawal" }>;
@@ -53,6 +57,7 @@ export function mergeCryptoWithdrawalDrafts(
     toAddress: incoming.toAddress ?? (chainChanged ? undefined : existing.toAddress),
     chainHint: incoming.chainHint ?? existing.chainHint,
     tokenHint: incoming.tokenHint ?? existing.tokenHint,
+    memo: incoming.memo ?? (chainChanged ? undefined : existing.memo),
   };
 }
 
@@ -140,6 +145,20 @@ export async function resolveCryptoWithdrawalIntent(
     };
   }
 
+  // A memo only means something on Stellar (see WithdrawInput's own
+  // comment, domain/wallets/adapter.ts) — rejected here too, same as the
+  // real endpoint, rather than silently dropped.
+  if (intent.memo && chain !== "stellar") {
+    return { ok: false, message: `A memo isn't applicable on ${capitalize(chain)} — it's a Stellar-specific concept.` };
+  }
+  if (intent.memo) {
+    try {
+      buildStellarMemo(intent.memo);
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // Omitted means USDC, the only token that existed before USDT support.
   const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
   if (EVM_CHAINS.includes(chain)) {
@@ -180,11 +199,33 @@ export async function resolveCryptoWithdrawalIntent(
     };
   }
 
-  const draft: CryptoWithdrawalDraft = { amount: amountStr, toAddress: intent.toAddress, chain, tokenSymbol };
+  const draft: CryptoWithdrawalDraft = {
+    amount: amountStr,
+    toAddress: intent.toAddress,
+    chain,
+    tokenSymbol,
+    ...(intent.memo ? { memo: intent.memo } : {}),
+  };
+
+  const memoLine = intent.memo
+    ? ` Memo: ${intent.memo}.`
+    : // Soft warning, not a block (mirrors crossChainSendDraft.ts's own
+      // stellarMemoWarning) — most Stellar addresses are genuine personal
+      // wallets that don't need one, so this can't be a hard requirement,
+      // but a shared/omnibus destination (an exchange deposit address)
+      // silently fails to attribute the payment without it. Tells the
+      // user to cancel and resend rather than "just reply with the memo"
+      // — a resolved draft clears the chat session (chat/service.ts), so
+      // there's no pending draft left for a follow-up message to attach
+      // to; confirm/cancel themselves are handled entirely by the app,
+      // never routed back through this chat pipeline.
+      chain === "stellar"
+      ? " If this is an exchange or platform deposit address, it likely needs a memo to credit you correctly — if so, cancel and resend including it (e.g. \"withdraw 20 USDC to G... with memo 12345\")."
+      : "";
 
   return {
     ok: true,
     draft,
-    summary: `Ready to withdraw ${amountStr} ${tokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive ${split.netAmount} ${tokenSymbol}. Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
+    summary: `Ready to withdraw ${amountStr} ${tokenSymbol} to ${intent.toAddress} on ${capitalize(chain)}. Fee: ${split.feeAmount} ${tokenSymbol} — you'll receive ${split.netAmount} ${tokenSymbol}.${memoLine} Double-check that address carefully — crypto sent to the wrong address can't be recovered. Confirm in the app to enter your PIN and complete it.`,
   };
 }

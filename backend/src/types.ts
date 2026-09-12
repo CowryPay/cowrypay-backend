@@ -137,6 +137,8 @@ export interface CryptoWithdrawal {
   treasuryAddress: string | null;
   provider: string;
   reference: string;
+  // Stellar-only — see WithdrawInput's own comment (adapter.ts).
+  memo: string | null;
   withdrawTxHash: string | null;
   withdrawConfirmedAt: string | null;
   state: CryptoWithdrawalState;

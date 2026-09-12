@@ -52,6 +52,19 @@ export interface WithdrawInput {
   toAddress: string;
   amount: string;
   reference: string;
+  // Stellar-only — attached to the outgoing payment operation as a real
+  // on-chain memo (numeric input becomes MEMO_ID, anything else becomes
+  // MEMO_TEXT; see stellarAdapter.ts's own buildStellarMemo). Real gap
+  // this closes (2026-09-12): a shared/omnibus Stellar destination (an
+  // exchange deposit address, e.g. Binance/Kraken — the exact same model
+  // this platform's own deposit address uses) needs a memo to attribute
+  // the payment to a specific account; withdraw() had no way to attach
+  // one at all before this, so a user withdrawing to one of those would
+  // land unattributed on the RECEIVING side, the same failure mode as the
+  // wallet-to-wallet incident this platform already hit once itself.
+  // Every other adapter (EVM, Solana) ignores this — memos are a Stellar-
+  // specific concept.
+  memo?: string;
 }
 
 // Implemented by whatever wallet infra creates the deposit address and pays

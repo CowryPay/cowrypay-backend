@@ -1,0 +1,11 @@
+-- Real gap: withdraw() had no way to attach a Stellar memo to an outgoing
+-- payment at all, so a user withdrawing to a shared/omnibus destination
+-- (an exchange deposit address requiring a memo — the exact same model
+-- this platform's own deposit address uses) would land unattributed on
+-- the receiving side, the same failure mode as the wallet-to-wallet
+-- incident this platform already hit once itself. Recorded on the
+-- withdrawal row (not just passed through in-memory) for the same reason
+-- every other detail here is: support/audit needs to answer "did this
+-- withdrawal include a memo?" without needing the original chat/API
+-- request that's long gone.
+alter table crypto_withdrawals add column if not exists memo text;

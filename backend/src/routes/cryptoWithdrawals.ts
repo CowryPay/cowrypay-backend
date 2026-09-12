@@ -13,6 +13,13 @@ const CreateCryptoWithdrawalSchema = z.object({
   pin: z.string().regex(/^\d{4,6}$/, "pin must be 4-6 digits"),
   // Omitted means USDC — see InitiateCryptoWithdrawalInput's own comment.
   tokenSymbol: z.string().min(1).optional(),
+  // Stellar-only — see WithdrawInput's own comment (domain/wallets/
+  // adapter.ts) for why this exists. Loosely bounded here (real validation
+  // — numeric fits a u64 MEMO_ID, text fits 28 UTF-8 bytes — happens in
+  // stellarAdapter.ts's buildStellarMemo, which throws a clear, specific
+  // error surfaced back through this same catch block); rejected outright
+  // for any non-Stellar chain in the service layer, not silently dropped.
+  memo: z.string().min(1).max(40).optional(),
 });
 
 // This endpoint itself is still never called from chat directly — a

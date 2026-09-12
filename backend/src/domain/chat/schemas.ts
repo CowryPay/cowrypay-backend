@@ -68,6 +68,12 @@ export const parsedIntentSchema = z.discriminatedUnion("kind", [
     // Which token to withdraw, if the user named one (e.g. "withdraw 20
     // USDT") — omitted means USDC, same as remittance's tokenHint.
     tokenHint: z.string().optional(),
+    // Stellar-only, e.g. "withdraw 20 USDC to G... with memo 12345" — a
+    // shared/omnibus destination (an exchange deposit address, the same
+    // model this platform's own deposit address uses) needs one to
+    // attribute the payment. See domain/wallets/adapter.ts's WithdrawInput
+    // for the full incident this closes.
+    memo: z.string().optional(),
   }),
   // Same §9 boundary as cryptoWithdrawal above — a parsed toAddress here
   // is only ever a draft the user must see and explicitly confirm before
