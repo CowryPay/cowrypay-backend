@@ -1,5 +1,17 @@
 export type ChatIntent = "address" | "balance" | "txHistory" | "chains" | "crossChainChains" | "help" | "unknown";
 
+// Real incident (2026-09-12): "Withdraw 20 USDC to a wallet address" got
+// hijacked into "Which chain would you like to deposit to?" — ADDRESS_RE
+// and DEPOSIT_INTENT_RE below both treat the bare word "address" as an
+// unambiguous deposit signal (see DEPOSIT_INTENT_RE's own comment: true
+// when it was written, before cryptoWithdrawal/crossChainSend existed —
+// both now talk about "wallet address"/"an address" constantly, since
+// that's literally what a withdrawal destination is). Guarded against
+// below: whenever the message also carries withdrawal/cross-chain-send
+// language, "address" no longer means "ask about MY deposit address" —
+// falls through to the LLM instead, which already classifies these
+// correctly (verified live).
+const WITHDRAWAL_CONTEXT_RE = /\b(withdraw|external wallet|cross[- ]?chain|bridg(e|ing))\b/i;
 const ADDRESS_RE = /\b(deposit address|wallet address|my address|my wallet)\b/i;
 const BALANCE_RE = /\b(balance|deposit status|my deposits?|how much (do i have|is in my (account|wallet)))\b/i;
 const TX_HISTORY_RE = /\b(transaction history|my transactions|recent (sends|transactions|payments)|send history|my sends)\b/i;
@@ -25,7 +37,7 @@ const HELP_RE = /\b(help|what can you do|commands|menu|options)\b/i;
 // reaches the LLM, which has no access to account data at all.
 export function classifyIntent(message: string): ChatIntent {
   const t = message.trim();
-  if (ADDRESS_RE.test(t)) return "address";
+  if (ADDRESS_RE.test(t) && !WITHDRAWAL_CONTEXT_RE.test(t)) return "address";
   if (BALANCE_RE.test(t)) return "balance";
   if (TX_HISTORY_RE.test(t)) return "txHistory";
   if (CHAINS_RE.test(t)) return CROSS_CHAIN_RE.test(t) ? "crossChainChains" : "chains";
@@ -95,7 +107,7 @@ export function matchDepositChainRequest(
     if (bare) return { chain: bare[1].toLowerCase() };
   }
 
-  if (DEPOSIT_INTENT_RE.test(t)) {
+  if (DEPOSIT_INTENT_RE.test(t) && !WITHDRAWAL_CONTEXT_RE.test(t)) {
     const chainMatch = t.match(CHAIN_NAME_RE);
     return { chain: chainMatch ? chainMatch[1].toLowerCase() : null };
   }
