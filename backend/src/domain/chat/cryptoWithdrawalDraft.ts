@@ -119,6 +119,27 @@ export async function resolveCryptoWithdrawalIntent(
     };
   }
 
+  // Real incident (2026-09-08), and reported recurring live in the chat
+  // flow specifically (2026-09-15): a user withdrawing Stellar USDC to
+  // "another wallet" pasted our own shared Stellar deposit address —
+  // trying to send to a CowryPay user the wrong way, since every CowryPay
+  // Stellar user's own "address" IS this same shared address (see
+  // internalTransfers/service.ts's own comment). The real, PIN-gated
+  // POST /crypto-withdrawals endpoint has always had this exact guard
+  // (cryptoWithdrawals/service.ts), but this chat DRAFT layer never did —
+  // so chat happily built a full "ready to confirm" card for a doomed
+  // withdrawal (Confirm would have hit that endpoint's guard and failed,
+  // AFTER the user re-entered their PIN) instead of catching it here,
+  // immediately, with a message that actually explains what to do
+  // instead. Same check, same message, moved earlier.
+  if (chain === "stellar" && env.stellarDepositAddress && intent.toAddress === env.stellarDepositAddress) {
+    return {
+      ok: false,
+      message:
+        "That's CowryPay's own shared Stellar address, not an external wallet — sending here can't reach anyone specific. To send to another CowryPay user, use their memo instead (ask them for their CowryPay memo, then say \"send to memo <number>\").",
+    };
+  }
+
   // Omitted means USDC, the only token that existed before USDT support.
   const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
   if (EVM_CHAINS.includes(chain)) {
