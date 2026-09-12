@@ -302,7 +302,13 @@ export async function handleChatMessage(userId: string, message: string): Promis
       await clearSession(userId);
       return { reply: resolution.summary, pendingCryptoWithdrawal: resolution.draft };
     }
-    await saveSession(userId, merged);
+    // clearToAddress: real bug found live (2026-09-12) — saving `merged`
+    // as-is after a rejection meant a toAddress just rejected as WRONG
+    // (the treasury guard, an invalid format) survived into the next
+    // message's merge, re-triggering the identical rejection even on a
+    // totally unrelated follow-up with no address at all. See
+    // CryptoWithdrawalResolution's own comment.
+    await saveSession(userId, resolution.clearToAddress ? { ...merged, toAddress: undefined } : merged);
     return { reply: resolution.message };
   }
 

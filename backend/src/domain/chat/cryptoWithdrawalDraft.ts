@@ -32,7 +32,16 @@ export type CryptoWithdrawalIntent = Extract<ParsedIntent, { kind: "cryptoWithdr
 
 export type CryptoWithdrawalResolution =
   | { ok: true; draft: CryptoWithdrawalDraft; summary: string }
-  | { ok: false; message: string };
+  // clearToAddress: real bug found live (2026-09-12) — chat/service.ts
+  // saves the full merged intent back to the session on every ok:false,
+  // including a toAddress that was JUST rejected as wrong (the treasury
+  // guard, an invalid format). mergeCryptoWithdrawalDrafts then happily
+  // carries that same bad address forward into the NEXT message too, even
+  // a totally unrelated one with no address at all — a user who once hit
+  // the treasury-address guard got the identical rejection again on their
+  // very next, address-free message. Set only by the two rejections where
+  // the CURRENT toAddress is simply wrong and must never be reused.
+  | { ok: false; message: string; clearToAddress?: boolean };
 
 // Mirrors remittanceDraft.ts's mergeRemittanceDrafts — new non-empty values
 // win, missing ones fall back to what's already known from an earlier
@@ -96,8 +105,20 @@ export async function resolveCryptoWithdrawalIntent(
       message: `${intent.amount} is below the ${env.cryptoWithdrawalMinAmountUsd} ${env.defaultTokenSymbol} minimum for a withdrawal — try a larger amount.`,
     };
   }
-  if (!intent.toAddress) {
-    return { ok: false, message: "What's the destination wallet address?" };
+  // Real UX request (2026-09-12): asking for the address before the chain
+  // meant a chain-specific detail (Stellar's memo — not a concept on
+  // EVM/Solana) could only ever be mentioned reactively, after the user
+  // already pasted an address. Asking for chain first when NEITHER is
+  // known yet lets the address question itself be chain-aware from the
+  // start. Only fires when both are missing — a bare address given
+  // directly (the common case for Stellar/Solana, whose formats are
+  // unambiguous) still resolves immediately below, no extra round-trip
+  // forced on it.
+  if (!intent.toAddress && !intent.chainHint) {
+    return {
+      ok: false,
+      message: `Which chain would you like to withdraw from — ${ALL_WITHDRAW_CHAINS.map(capitalize).join(", ")}?`,
+    };
   }
 
   let chain = intent.chainHint?.toLowerCase();
@@ -107,9 +128,21 @@ export async function resolveCryptoWithdrawalIntent(
       message: `"${intent.chainHint}" isn't a chain I recognize. Which one: ${ALL_WITHDRAW_CHAINS.map(capitalize).join(", ")}?`,
     };
   }
-  if (!chain) {
+  if (!chain && intent.toAddress) {
     chain = inferChainFromAddress(intent.toAddress) ?? undefined;
   }
+
+  if (!intent.toAddress) {
+    // Chain is guaranteed known here (the check above only lets this far
+    // when chainHint was already given) — the address question can now
+    // mention the one chain-specific detail that matters.
+    const memoNote =
+      chain === "stellar"
+        ? " If you're withdrawing to an exchange or platform account, include the memo too (e.g. \"G... with memo 12345\")."
+        : "";
+    return { ok: false, message: `What's the destination wallet address on ${capitalize(chain!)}?${memoNote}` };
+  }
+
   if (!chain) {
     return {
       ok: false,
@@ -120,6 +153,7 @@ export async function resolveCryptoWithdrawalIntent(
   if (!isValidAddressForChain(chain, intent.toAddress)) {
     return {
       ok: false,
+      clearToAddress: true,
       message: `"${intent.toAddress}" doesn't look like a valid ${capitalize(chain)} address — double-check it and send it again.`,
     };
   }
@@ -140,6 +174,7 @@ export async function resolveCryptoWithdrawalIntent(
   if (chain === "stellar" && env.stellarDepositAddress && intent.toAddress === env.stellarDepositAddress) {
     return {
       ok: false,
+      clearToAddress: true,
       message:
         "That's CowryPay's own shared Stellar address, not an external wallet — sending here can't reach anyone specific. To send to another CowryPay user, use their memo instead (ask them for their CowryPay memo, then say \"send to memo <number>\").",
     };
