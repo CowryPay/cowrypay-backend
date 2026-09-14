@@ -5,18 +5,21 @@
 // and the next one is likely to look nothing like this one. No first-name
 // personalization — confirmed live (2026-09-14) that this field isn't
 // recorded anywhere for existing users, so a merge tag would just print
-// blank/undefined for all 89 recipients instead of degrading gracefully.
+// blank/undefined for all 89 recipients instead of degrading gracefully;
+// greeted generically ("Hi Amigo") instead, per the user's own exact
+// copy.
 //
-// Structure and palette deliberately mirror feedbackCampaign.ts's own
-// proven shape (light #f4f2ee ground, white card, a short dark header bar,
-// dark-on-white body copy) — a first version of this went out full-bleed
-// dark green on dark, and read as a marketing graphic pasted into an
-// email rather than an actual email (real feedback, 2026-09-14). This is
-// the same structural choice already sent once successfully, just with
-// CowryPay's own green instead of the earlier gold accent.
+// Structure mirrors feedbackCampaign.ts's own proven shape (light #f4f2ee
+// ground, white card, a short dark header bar, dark-on-white body copy) —
+// an earlier full-bleed dark-green version read as a marketing graphic
+// pasted into an email rather than an actual email (real feedback,
+// 2026-09-14). Copy is the user's own exact wording, emoji stripped (a
+// second round of feedback, same day) so it reads as written by a person,
+// not generated — no icon chips or extra elements added beyond what was
+// actually asked for.
 
-export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v2";
-export const NEW_WEEK_CAMPAIGN_SUBJECT = "Two new ways to move your money";
+export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v3";
+export const NEW_WEEK_CAMPAIGN_SUBJECT = "Happy new week from CowryPay";
 export const NEW_WEEK_CAMPAIGN_FROM = "CowryPay <hello@cowrypay.xyz>";
 
 const APP_URL = "https://cowrypay.xyz";
@@ -35,74 +38,33 @@ export function buildNewWeekCampaignEmail(unsubscribeUrl: string): { html: strin
               </td>
             </tr>
             <tr>
-              <td style="padding:32px 32px 4px 32px;">
-                <p style="margin:0 0 6px 0;color:#5b8a6d;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Happy new week</p>
-                <h1 style="margin:0 0 14px 0;color:#12172b;font-size:23px;line-height:1.35;font-weight:700;">Two new ways to move your money</h1>
-                <p style="margin:0 0 24px 0;color:#4a5068;font-size:15px;line-height:1.6;">
-                  We shipped two things last week that make CowryPay work for more of what you're holding, and more of where it needs to go.
+              <td style="padding:32px 32px 8px 32px;">
+                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">Hi Amigo,</p>
+                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">
+                  Happy new week. Hope you're starting it off strong.
                 </p>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:0 32px;">
-                <hr style="border:none;border-top:1px solid #e7e3da;margin:0;" />
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:24px 32px 0 32px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td width="40" valign="top" style="padding-right:14px;padding-bottom:20px;">
-                      <table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="40" height="40" align="center" valign="middle" style="width:40px;height:40px;border-radius:50%;background-color:#e5f5ea;color:#0e6b3a;font-size:14px;font-weight:700;font-family:Arial,sans-serif;">T&#8320;</td></tr></table>
-                    </td>
-                    <td valign="top" style="padding-bottom:20px;">
-                      <p style="margin:0 0 4px 0;color:#12172b;font-size:16px;font-weight:700;">USDT0 is live on Stellar</p>
-                      <p style="margin:0;color:#4a5068;font-size:14.5px;line-height:1.6;">
-                        Hold it, send it, and cash it out on Stellar — same fees and speed you already know, one more stablecoin to work with.
-                      </p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td width="40" valign="top" style="padding-right:14px;">
-                      <table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="40" height="40" align="center" valign="middle" style="width:40px;height:40px;border-radius:50%;background-color:#e5f5ea;color:#0e6b3a;font-size:16px;font-weight:700;font-family:Arial,sans-serif;">&#926;</td></tr></table>
-                    </td>
-                    <td valign="top">
-                      <p style="margin:0 0 4px 0;color:#12172b;font-size:16px;font-weight:700;">Ethereum now off-ramps directly</p>
-                      <p style="margin:0;color:#4a5068;font-size:14.5px;line-height:1.6;">
-                        USDC on Ethereum can go straight to a bank account or mobile money — no bridging to another chain first.
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:4px 32px 28px 32px;">
-                <table role="presentation" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td style="padding:0 6px 8px 0;"><span style="display:inline-block;font-family:Arial,sans-serif;font-size:12px;font-weight:600;color:#3a5c47;background-color:#eef6f0;border:1px solid #dde8e0;border-radius:20px;padding:5px 12px;">NGN</span></td>
-                    <td style="padding:0 6px 8px 0;"><span style="display:inline-block;font-family:Arial,sans-serif;font-size:12px;font-weight:600;color:#3a5c47;background-color:#eef6f0;border:1px solid #dde8e0;border-radius:20px;padding:5px 12px;">KES</span></td>
-                    <td style="padding:0 6px 8px 0;"><span style="display:inline-block;font-family:Arial,sans-serif;font-size:12px;font-weight:600;color:#3a5c47;background-color:#eef6f0;border:1px solid #dde8e0;border-radius:20px;padding:5px 12px;">UGX</span></td>
-                    <td style="padding:0 6px 8px 0;"><span style="display:inline-block;font-family:Arial,sans-serif;font-size:12px;font-weight:600;color:#3a5c47;background-color:#eef6f0;border:1px solid #dde8e0;border-radius:20px;padding:5px 12px;">GHS</span></td>
-                    <td style="padding:0 0 8px 0;"><span style="display:inline-block;font-family:Arial,sans-serif;font-size:12px;font-weight:600;color:#3a5c47;background-color:#eef6f0;border:1px solid #dde8e0;border-radius:20px;padding:5px 12px;">TZS</span></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:0 32px 32px 32px;">
-                <table role="presentation" cellpadding="0" cellspacing="0">
+                <p style="margin:0 0 24px 0;color:#12172b;font-size:16px;line-height:1.6;">
+                  We've got some good news to kick things off — a couple of new things just landed on CowryPay that we think you'll love:
+                </p>
+                <p style="margin:0 0 8px 0;color:#12172b;font-size:16px;font-weight:700;">USDT0 on Stellar is here</p>
+                <p style="margin:0 0 24px 0;color:#4a5068;font-size:15px;line-height:1.6;">
+                  You can now hold, send, and cash out USDT0 right on Stellar — same speed and low fees you're used to, just more stablecoin options for you.
+                </p>
+                <p style="margin:0 0 8px 0;color:#12172b;font-size:16px;font-weight:700;">Ethereum is now supported for off-ramp</p>
+                <p style="margin:0 0 28px 0;color:#4a5068;font-size:15px;line-height:1.6;">
+                  Got USDC sitting on Ethereum? You can now cash it out straight to your bank or mobile money, no extra bridging needed. One less step between you and your money.
+                </p>
+                <p style="margin:0 0 28px 0;color:#12172b;font-size:16px;line-height:1.6;">
+                  That's it for now — go make this week a good one, and don't forget your money's always ready when you need it.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 32px 0;">
                   <tr>
                     <td style="background-color:#1fa955;border-radius:8px;">
                       <a href="${APP_URL}" style="display:inline-block;padding:13px 28px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">Open CowryPay</a>
                     </td>
                   </tr>
                 </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:0 32px 32px 32px;">
-                <p style="margin:0;color:#12172b;font-size:14px;line-height:1.6;">Have a good week,<br />The CowryPay team</p>
+                <p style="margin:0;color:#12172b;font-size:15px;line-height:1.6;">The CowryPay Team</p>
               </td>
             </tr>
             <tr>
@@ -120,22 +82,23 @@ export function buildNewWeekCampaignEmail(unsubscribeUrl: string): { html: strin
   </body>
 </html>`;
 
-  const text = `Happy new week.
+  const text = `Hi Amigo,
 
-Two things shipped last week that make CowryPay work for more of what you're holding, and more of where it needs to go:
+Happy new week. Hope you're starting it off strong.
 
-USDT0 is live on Stellar
-Hold it, send it, and cash it out on Stellar — same fees and speed you already know, one more stablecoin to work with.
+We've got some good news to kick things off — a couple of new things just landed on CowryPay that we think you'll love:
 
-Ethereum now off-ramps directly
-USDC on Ethereum can go straight to a bank account or mobile money — no bridging to another chain first.
+USDT0 on Stellar is here
+You can now hold, send, and cash out USDT0 right on Stellar — same speed and low fees you're used to, just more stablecoin options for you.
 
-Supported payout currencies: NGN, KES, UGX, GHS, TZS.
+Ethereum is now supported for off-ramp
+Got USDC sitting on Ethereum? You can now cash it out straight to your bank or mobile money, no extra bridging needed. One less step between you and your money.
+
+That's it for now — go make this week a good one, and don't forget your money's always ready when you need it.
 
 Open CowryPay: ${APP_URL}
 
-Have a good week,
-The CowryPay team
+The CowryPay Team
 
 ---
 You're receiving this because you have a CowryPay account. Unsubscribe: ${unsubscribeUrl}`;
