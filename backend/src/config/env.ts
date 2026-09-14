@@ -23,6 +23,19 @@ export const env = {
   supabaseUrl: required("SUPABASE_URL"),
   walletProvider: process.env.WALLET_PROVIDER ?? "mock",
   kycProvider: process.env.KYC_PROVIDER ?? "mock",
+  // Only required when kycProvider === "dojah" — checked lazily by that
+  // adapter (once it exists), not here, so mock mode keeps working with
+  // these unset. Widget SDK launch (per the KYC issue's own decision — the
+  // frontend has a real screen to mount it in, unlike a chat-only flow):
+  // appId + publicKey are handed to the frontend to render Dojah's hosted
+  // widget; secretKey is server-side only, for verifying the completion
+  // webhook and any direct API calls. widgetId identifies the specific
+  // EasyOnboard flow configured in Dojah's dashboard (document types per
+  // country, liveness/selfie-match) — a widget can't launch without one.
+  dojahAppId: process.env.DOJAH_APP_ID,
+  dojahPublicKey: process.env.DOJAH_PUBLIC_KEY,
+  dojahSecretKey: process.env.DOJAH_SECRET_KEY,
+  dojahWidgetId: process.env.DOJAH_WIDGET_ID,
   // Only required when walletProvider === "blockradar" — checked lazily by
   // that adapter, not here, so mock mode keeps working with these unset.
   blockradarApiKey: process.env.BLOCKRADAR_API_KEY,
