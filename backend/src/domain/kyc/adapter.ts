@@ -1,21 +1,8 @@
 export interface KycSession {
   providerReference: string;
-  // Where the client sends the user to complete ID + liveness verification
-  // — a redirect-link-style vendor. Undefined for the mock adapter (nothing
-  // to redirect to) and for a widget-launch vendor like Dojah, which uses
-  // `widget` below instead.
+  // Where the client sends the user to complete ID + liveness verification.
+  // Undefined for the mock adapter — there's nothing to redirect to.
   redirectUrl?: string;
-  // Config the frontend passes straight into an embedded Widget SDK
-  // component to mount it — Dojah's launch mechanism (confirmed: the
-  // frontend has a real screen to mount it in, see KYC issue #2). Unlike
-  // redirectUrl, there's no server-to-vendor call to "create" this session;
-  // the widget is initialized entirely client-side with these values plus
-  // providerReference as its own reference id.
-  widget?: {
-    appId: string;
-    publicKey: string;
-    widgetId: string;
-  };
 }
 
 // Framework-agnostic slice of an incoming webhook request — just what a
