@@ -6,8 +6,9 @@
 // personalization — confirmed live (2026-09-14) that this field isn't
 // recorded anywhere for existing users, so a merge tag would just print
 // blank/undefined for all 89 recipients instead of degrading gracefully;
-// greeted generically ("Hi Amigo") instead, per the user's own exact
-// copy.
+// greeted generically ("Hi there 👋") instead, per the user's own exact
+// copy — the one emoji deliberately kept after an earlier round of
+// feedback asked for the rest stripped.
 //
 // Structure mirrors feedbackCampaign.ts's own proven shape (light #f4f2ee
 // ground, white card, a short dark header bar, dark-on-white body copy) —
@@ -18,7 +19,7 @@
 // not generated — no icon chips or extra elements added beyond what was
 // actually asked for.
 
-export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v3";
+export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v4";
 export const NEW_WEEK_CAMPAIGN_SUBJECT = "Happy new week from CowryPay";
 export const NEW_WEEK_CAMPAIGN_FROM = "CowryPay <hello@cowrypay.xyz>";
 
@@ -39,7 +40,7 @@ export function buildNewWeekCampaignEmail(unsubscribeUrl: string): { html: strin
             </tr>
             <tr>
               <td style="padding:32px 32px 8px 32px;">
-                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">Hi Amigo,</p>
+                <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">Hi there &#128075;</p>
                 <p style="margin:0 0 20px 0;color:#12172b;font-size:16px;line-height:1.6;">
                   Happy new week. Hope you're starting it off strong.
                 </p>
@@ -82,7 +83,7 @@ export function buildNewWeekCampaignEmail(unsubscribeUrl: string): { html: strin
   </body>
 </html>`;
 
-  const text = `Hi Amigo,
+  const text = `Hi there 👋
 
 Happy new week. Hope you're starting it off strong.
 
