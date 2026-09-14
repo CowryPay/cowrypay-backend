@@ -157,10 +157,33 @@ export function findInstitutionMatches(query: string, institutions: Institution[
   const qSub = normalizeForSubstring(query);
   if (!qSub) return [];
 
+  // Real incident found live (2026-09-14, alongside the Zenith Bank fix
+  // above): "Guaranty Trust Bank" confidently cross-matched to the WRONG
+  // institution, "Trust Microfinance Bank" (and separately, "First City
+  // Monument Bank" to "CIT Microfinance Bank") — worse than an ambiguous
+  // match, since each is a single, silently-wrong "confident" one. Cause:
+  // filler-stripping can reduce an institution's name down to a short,
+  // generic stub ("Trust Microfinance Bank" -> "trust", "CIT
+  // Microfinance Bank" -> "cit") that's then trivially found SOMEWHERE
+  // inside a longer, unrelated query via qSub.includes(iSub) — true, but
+  // meaningless, since a 3-5 char fragment barely identifies anything on
+  // its own once it's untethered from word boundaries.
+  //
+  // The other direction — iSub.includes(qSub), the institution's (longer)
+  // name containing the (shorter) query verbatim — doesn't have this
+  // problem and stays unguarded: a short user query like "Opay" being a
+  // genuine substring of "Paycom(Opay)" is the normal, safe "typed a
+  // partial/short name" case, not a spurious fragment match. Confirmed
+  // live: guarding this direction too (a symmetric length-ratio check)
+  // broke that real match; guarding only the risky direction fixes both
+  // incidents above without it.
   if (qSub.length >= 3) {
     const substringMatches = institutions.filter((inst) => {
       const iSub = normalizeForSubstring(inst.name);
-      return iSub.length >= 3 && (iSub.includes(qSub) || qSub.includes(iSub));
+      if (iSub.length < 3) return false;
+      if (iSub.includes(qSub)) return true;
+      if (qSub.includes(iSub)) return iSub.length / qSub.length >= 0.5;
+      return false;
     });
     if (substringMatches.length > 0) return substringMatches;
   }
