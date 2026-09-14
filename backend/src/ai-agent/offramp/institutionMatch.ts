@@ -127,6 +127,23 @@ export function findInstitutionMatches(query: string, institutions: Institution[
   const exactMatches = institutions.filter((inst) => inst.name.trim().toLowerCase() === exactKey);
   if (exactMatches.length > 0) return exactMatches;
 
+  // Checked next, ahead of alias/substring/fuzzy: real incident found live
+  // (2026-09-14) — "Zenith Bank" against Centiiv's list returned 3 matches
+  // (Zenith Bank Plc, Zenith Eazy Wallet, ZenithMobile), all via the
+  // substring tier below, because that tier strips "bank" as filler
+  // before comparing (see SUBSTRING_FILLER) — collapsing the query down
+  // to bare "zenith", which is trivially a substring of every one of that
+  // brand's products, not just the actual bank. A verbatim (filler-
+  // preserving) prefix match doesn't have that problem: "zenith bank" is
+  // a prefix of "zenith bank plc" but not of "zenith eazy wallet" or
+  // "zenithmobile" — so it stays unambiguous exactly where the
+  // filler-stripped substring check over-matches.
+  const queryRaw = rawNormalize(query);
+  if (queryRaw.length >= 3) {
+    const prefixMatches = institutions.filter((inst) => rawNormalize(inst.name).startsWith(queryRaw));
+    if (prefixMatches.length > 0) return prefixMatches;
+  }
+
   const aliasKey = rawNormalize(query);
   const aliasKeywords = ALIASES[aliasKey];
   if (aliasKeywords) {
