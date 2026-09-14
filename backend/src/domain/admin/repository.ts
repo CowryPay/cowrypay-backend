@@ -769,4 +769,34 @@ export const adminRepo = {
     );
     return rows.map((r) => ({ id: r.id, email: r.email, createdAt: r.created_at }));
   },
+
+  // Persisted "already alerted" state for reserveMonitor.ts — same fix as
+  // double_credit_alerts above (migration 0021), applied to the same
+  // class of bug found again 2026-09-14: an in-memory "currently breached"
+  // Set resets on every deploy, so an already-known, already-explained
+  // shortfall (e.g. a platform fee already swept before a provider
+  // refund — see treasury.ts's KNOWN_WRITE_OFFS) re-"discovers" itself as
+  // newly breached and re-alerts on Telegram after every single deploy.
+  // Keyed by (chain, tokenSymbol) with the delta at last alert, not just a
+  // boolean — lets the monitor tell "still the same known gap" (skip)
+  // apart from "this chain/token's shortfall just got worse" (alert
+  // again), so a genuinely new problem on top of an already-explained one
+  // still surfaces. See migration 0023's own comment.
+  async getAlertedShortfalls(): Promise<Map<string, number>> {
+    const { rows } = await pool.query(`select chain, token_symbol, last_delta_usdc from reserve_shortfall_alerts`);
+    return new Map(rows.map((r) => [`${r.chain}-${r.token_symbol}`, Number(r.last_delta_usdc)]));
+  },
+
+  async upsertShortfallAlert(chain: string, tokenSymbol: string, deltaUsdc: number): Promise<void> {
+    await pool.query(
+      `insert into reserve_shortfall_alerts (chain, token_symbol, last_delta_usdc, alerted_at)
+       values ($1, $2, $3, now())
+       on conflict (chain, token_symbol) do update set last_delta_usdc = $3, alerted_at = now()`,
+      [chain, tokenSymbol, deltaUsdc],
+    );
+  },
+
+  async clearShortfallAlert(chain: string, tokenSymbol: string): Promise<void> {
+    await pool.query(`delete from reserve_shortfall_alerts where chain = $1 and token_symbol = $2`, [chain, tokenSymbol]);
+  },
 };

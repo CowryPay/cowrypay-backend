@@ -196,6 +196,12 @@ const KNOWN_WRITE_OFFS: Array<{ chain: string; tokenSymbol: string; note: string
     note:
       "Includes a documented ~9.85 USDC discrepancy (send 70d26246-bc97-4c53-91f4-9cd7b92374c7): Paycrest reported an order refunded and it was auto-credited to the user per the normal flow, but no matching on-chain refund was found arriving at our registered treasury. Operator confirmed on 2026-08-26 that Paycrest returned the funds via a separate channel/arrangement.",
   },
+  {
+    chain: "stellar",
+    tokenSymbol: "USDC",
+    note:
+      "Includes ~1.76 USDC across three refunded sends (0a0e36ac, 40c79a4c, a3b7ee7e) where the platform fee had already been swept on-chain to the fee treasury before the off-ramp provider refunded the order. Per sendStateTransition.ts's own design, the user is credited back the full amount (fee included) regardless — charging a fee on a send that never completed would be wrong — so the already-swept fee is absorbed as the cost of the failed send, not chased. Confirmed 2026-09-14.",
+  },
 ];
 
 // Pure display/alerting arithmetic, not a ledger write — nothing here
