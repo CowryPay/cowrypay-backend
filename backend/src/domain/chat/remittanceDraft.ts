@@ -286,6 +286,15 @@ async function finalizeRemittanceDraft(
   // "isn't supported" framing is still the right call. See
   // providerSelection.ts's own comment for the incident this closes.
   let noRateReason: string | null = null;
+  // Set only when a provider WAS eligible and DID win a real rate, but
+  // the recipient's bank/network couldn't be confidently cross-matched
+  // onto that provider's own list — same "this route genuinely works,
+  // don't say otherwise" reasoning as noRateReason above, just a
+  // different real cause. Without this, the fallback below reached for
+  // explainNoProviderMessage's "isn't supported right now" framing even
+  // when a real rate existed seconds earlier (see providerSelection.ts's
+  // own comment on the self-contradictory message this produced live).
+  let institutionMatchIssue: string | null = null;
 
   if (isQuidaxEligible(chain, fiatCurrency) || isCentiivEligible(chain, fiatCurrency)) {
     try {
@@ -311,6 +320,7 @@ async function finalizeRemittanceDraft(
           console.log(
             `[remittance-draft] ${selection.provider} won the rate for ${chain} but institution cross-match found ${matches.length} matches for "${searchTerm}" (need exactly 1) — falling back to paycrest, which isn't eligible for ${chain} either.`,
           );
+          institutionMatchIssue = `We found a good rate for this send, but couldn't confidently match "${searchTerm}" to one specific bank — please try again in a moment, or contact support if this keeps happening.`;
         }
       } else if (selection.provider === "centiiv") {
         const beneficiaryType = centiivBeneficiaryTypeFor(fiatCurrency);
@@ -332,6 +342,7 @@ async function finalizeRemittanceDraft(
             console.log(
               `[remittance-draft] centiiv won the rate for ${chain} but institution cross-match found ${matches.length} matches for "${searchTerm}" (need exactly 1) — falling back to paycrest, which isn't eligible for ${chain} either.`,
             );
+            institutionMatchIssue = `We found a good rate for this send, but couldn't confidently match "${searchTerm}" to one specific bank — please try again in a moment, or contact support if this keeps happening.`;
           }
         } else if (beneficiaryType === "MOBILEMONEY") {
           // UGX/KES/GHS — there's no institution list to cross-match
@@ -355,6 +366,7 @@ async function finalizeRemittanceDraft(
             console.log(
               `[remittance-draft] centiiv won the rate for ${chain} but couldn't resolve a mobile money network for ${fiatCurrency} from "${searchTerm}" — falling back to paycrest, which isn't eligible for ${chain} either.`,
             );
+            institutionMatchIssue = `We found a good rate for this send, but couldn't resolve a mobile money network for "${searchTerm}" — please try again in a moment, or contact support if this keeps happening.`;
           }
         }
       }
@@ -377,12 +389,13 @@ async function finalizeRemittanceDraft(
   // failing, not "the default was never valid to begin with").
   if (provider === "paycrest" && !isPaycrestEligible(chain, fiatCurrency)) {
     console.log(`[remittance-draft] no eligible provider for ${chain}/${fiatCurrency} after selection — defaulted to paycrest, which isn't eligible.`);
-    // noRateReason (set only for NoOfframpRateError) means a real provider
-    // WAS eligible and genuinely tried this exact request — explainNoProvider
-    // Message's "isn't supported" framing would be false in that case (see
-    // its own real-incident comment: a too-small USDT0-on-Stellar amount
-    // showed "Stellar to NGN isn't supported", when the route works fine).
-    return { ok: false, message: noRateReason ?? explainNoProviderMessage(chain, fiatCurrency) };
+    // noRateReason (set only for NoOfframpRateError) and institutionMatchIssue
+    // both mean a real provider WAS eligible and genuinely tried this exact
+    // request — explainNoProviderMessage's "isn't supported" framing would be
+    // false in either case (see its own real-incident comments: a too-small
+    // USDT0-on-Stellar amount, and separately an ambiguous bank cross-match,
+    // both showed "Stellar to NGN isn't supported" when the route works fine).
+    return { ok: false, message: noRateReason ?? institutionMatchIssue ?? explainNoProviderMessage(chain, fiatCurrency) };
   }
 
   async function createOrderForProvider(p: OfframpProvider): Promise<CreatedOrder> {

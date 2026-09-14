@@ -152,7 +152,15 @@ export function explainNoProviderMessage(chain: string, fiatCurrency: string): s
   const chainLabel = capitalize(chain);
   const currencyLabel = fiatCurrency.toUpperCase();
   const altChains = chainsSupportingCurrency(fiatCurrency).filter((c) => c.toLowerCase() !== chain.toLowerCase());
-  const altCurrencies = currenciesReachableFromChain(chain);
+  // Excludes fiatCurrency itself — real bug found live (2026-09-14): this
+  // function can be called for a chain/currency pair that IS statically
+  // eligible (a provider exists and even quoted a real rate) but still
+  // failed for an unrelated reason (see remittanceDraft.ts's institution
+  // cross-match fallback) — without this filter, "Sending from Stellar to
+  // NGN isn't supported right now" was immediately followed by "Stellar
+  // can currently send to: NGN, ...", contradicting itself in the same
+  // message.
+  const altCurrencies = currenciesReachableFromChain(chain).filter((c) => c.toUpperCase() !== currencyLabel);
 
   const parts = [`Sending from ${chainLabel} to ${currencyLabel} isn't supported right now.`];
   if (altChains.length > 0) {
