@@ -11,6 +11,12 @@ import {
   FEEDBACK_CAMPAIGN_SUBJECT,
   buildFeedbackCampaignEmail,
 } from "../domain/campaigns/feedbackCampaign.js";
+import {
+  NEW_WEEK_CAMPAIGN_KEY,
+  NEW_WEEK_CAMPAIGN_SUBJECT,
+  NEW_WEEK_CAMPAIGN_FROM,
+  buildNewWeekCampaignEmail,
+} from "../domain/campaigns/newWeekCampaign.js";
 
 export const campaignsRouter = Router();
 
@@ -100,5 +106,71 @@ campaignsRouter.post("/admin/campaigns/feedback/send", async (req: Request, res:
   }
 
   console.log(`[campaigns] feedback campaign send finished:`, results);
+  res.json({ ok: true, ...results });
+});
+
+const SendNewWeekCampaignSchema = z.object({
+  actor: z.string().min(1),
+  // When set, sends ONLY to this address (still subject to the unsubscribe
+  // check) — the test-send step before the real bulk send.
+  testEmail: z.string().email().optional(),
+});
+
+campaignsRouter.post("/admin/campaigns/new-week/send", async (req: Request, res: Response) => {
+  if (!requireAdminKey(req, res)) return;
+  const parsed = SendNewWeekCampaignSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request", details: parsed.error.flatten() });
+    return;
+  }
+  const { actor, testEmail } = parsed.data;
+
+  if (!env.publicBaseUrl) {
+    res.status(500).json({ error: "PUBLIC_BASE_URL must be set to generate unsubscribe links" });
+    return;
+  }
+
+  const targets = testEmail
+    ? [{ email: testEmail }]
+    : (await adminRepo.listUserEmails()).map((u) => ({ email: u.email }));
+
+  console.log(
+    `[campaigns] new-week campaign send starting: actor=${actor}, targets=${targets.length}, testMode=${Boolean(testEmail)}`,
+  );
+
+  const results = { sent: 0, skippedUnsubscribed: 0, skippedAlreadySent: 0, failed: 0 };
+
+  for (const { email } of targets) {
+    try {
+      if (await campaignsRepo.isUnsubscribed(email)) {
+        results.skippedUnsubscribed++;
+        continue;
+      }
+      if (await campaignsRepo.wasSent(NEW_WEEK_CAMPAIGN_KEY, email)) {
+        results.skippedAlreadySent++;
+        continue;
+      }
+
+      const unsubscribeUrl = `${env.publicBaseUrl}/campaigns/unsubscribe?email=${encodeURIComponent(email)}&token=${generateUnsubscribeToken(email)}`;
+      const { html, text } = buildNewWeekCampaignEmail(unsubscribeUrl);
+      const sent = await sendCampaignEmail({
+        to: email,
+        subject: NEW_WEEK_CAMPAIGN_SUBJECT,
+        html,
+        text,
+        from: NEW_WEEK_CAMPAIGN_FROM,
+      });
+      await campaignsRepo.logSend(NEW_WEEK_CAMPAIGN_KEY, email, "sent", sent.id);
+      results.sent++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[campaigns] send failed for ${email}:`, message);
+      await campaignsRepo.logSend(NEW_WEEK_CAMPAIGN_KEY, email, "failed", undefined, message);
+      results.failed++;
+    }
+    await delay(400);
+  }
+
+  console.log(`[campaigns] new-week campaign send finished:`, results);
   res.json({ ok: true, ...results });
 });

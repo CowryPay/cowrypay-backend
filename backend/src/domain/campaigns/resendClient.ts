@@ -5,6 +5,11 @@ export interface SendCampaignEmailInput {
   subject: string;
   html: string;
   text: string;
+  // Per-campaign override — the feedback campaign already shipped from
+  // env.campaignFromEmail's default (feedback@cowrypay.xyz); the new-week
+  // campaign needs hello@cowrypay.xyz instead. Omitted keeps the existing
+  // default, so the original campaign's behavior is untouched.
+  from?: string;
 }
 
 // Plain fetch against Resend's REST API rather than pulling in their SDK —
@@ -22,7 +27,7 @@ export async function sendCampaignEmail(input: SendCampaignEmailInput): Promise<
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: env.campaignFromEmail,
+      from: input.from ?? env.campaignFromEmail,
       to: input.to,
       subject: input.subject,
       html: input.html,
