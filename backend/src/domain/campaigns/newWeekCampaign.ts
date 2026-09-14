@@ -19,7 +19,7 @@
 // not generated — no icon chips or extra elements added beyond what was
 // actually asked for.
 
-export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v5";
+export const NEW_WEEK_CAMPAIGN_KEY = "2026-09-new-week-usdt0-ethereum-v6";
 export const NEW_WEEK_CAMPAIGN_SUBJECT = "Happy new week from CowryPay";
 export const NEW_WEEK_CAMPAIGN_FROM = "CowryPay <hello@cowrypay.xyz>";
 
@@ -38,7 +38,7 @@ export function buildNewWeekCampaignEmail(unsubscribeUrl: string): { html: strin
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
                     <td style="padding-right:8px;">
-                      <div style="width:20px;height:20px;background-color:#3ddc84;border-radius:5px 5px 5px 0;font-size:0;line-height:0;">&nbsp;</div>
+                      <img src="https://cowrypay.xyz/logo.png" width="22" height="22" alt="CowryPay" style="display:block;width:22px;height:22px;border:0;" />
                     </td>
                     <td style="color:#ffffff;font-size:19px;font-weight:700;letter-spacing:0.01em;">Cowry<span style="color:#3ddc84;">Pay</span></td>
                   </tr>
