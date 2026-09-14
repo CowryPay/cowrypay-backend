@@ -24,7 +24,7 @@ export const env = {
   walletProvider: process.env.WALLET_PROVIDER ?? "mock",
   kycProvider: process.env.KYC_PROVIDER ?? "mock",
   // Only required when kycProvider === "dojah" — checked lazily by that
-  // adapter (once it exists), not here, so mock mode keeps working with
+  // adapter (dojahAdapter.ts), not here, so mock mode keeps working with
   // these unset. Widget SDK launch (per the KYC issue's own decision — the
   // frontend has a real screen to mount it in, unlike a chat-only flow):
   // appId + publicKey are handed to the frontend to render Dojah's hosted
