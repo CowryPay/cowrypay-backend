@@ -53,15 +53,15 @@ export const kycAttemptsRepo = {
     client: PoolClient,
     id: string,
     status: "verified" | "rejected",
-  ): Promise<KycVerificationAttempt> {
+  ): Promise<KycVerificationAttempt | null> {
     const { rows } = await client.query(
       `update kyc_verification_attempts
        set status = $2, resolved_at = now(), updated_at = now()
-       where id = $1
+       where id = $1 and status = 'pending'
        returning *`,
       [id, status],
     );
-    return mapAttempt(rows[0]);
+    return rows[0] ? mapAttempt(rows[0]) : null;
   },
 
   async getForUser(userId: string): Promise<KycVerificationAttempt[]> {

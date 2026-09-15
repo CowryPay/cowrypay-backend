@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { env } from "../../config/env.js";
-import type { KycAdapter, KycSession, WebhookRequest } from "./adapter.js";
+import type { KycAdapter, KycResult, KycSession, KycSubject, WebhookRequest } from "./adapter.js";
 
 // Dojah EasyOnboard, launched via the embedded Widget SDK (Connect class)
 // on the frontend's own KYC screen — see KYC issues #2/#3. There's no
@@ -68,6 +68,42 @@ function allStepsPassed(data: Record<string, unknown> | undefined): boolean {
   return checks.length > 0 && checks.every((step) => step.status === true);
 }
 
+function field(obj: unknown, ...path: string[]): unknown {
+  return path.reduce<unknown>(
+    (cur, key) => (typeof cur === "object" && cur !== null ? (cur as Record<string, unknown>)[key] : undefined),
+    obj,
+  );
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+// Who to AML-screen (KYC issue #6), taken from the most authoritative source
+// in the payload: the government registry record first (keyed by id type,
+// e.g. government_data.data.nin.entity), then the scanned ID document, and
+// only then user_data (typed in by the user). Same order for date of birth.
+function extractSubject(data: Record<string, unknown> | undefined): KycSubject | undefined {
+  const registry = field(data, "government_data", "data");
+  const registryEntity =
+    typeof registry === "object" && registry !== null
+      ? Object.values(registry as Record<string, unknown>).map((v) => field(v, "entity")).find((e) => typeof e === "object" && e)
+      : undefined;
+  const idDoc = field(data, "id", "data", "id_data");
+  const typed = field(data, "user_data", "data");
+
+  for (const source of [registryEntity, idDoc, typed]) {
+    const first = text(field(source, "first_name"));
+    const last = text(field(source, "last_name"));
+    if (!first || !last) continue;
+    const name = [first, text(field(source, "middle_name")), last].filter(Boolean).join(" ");
+    const dateOfBirth = text(field(source, "date_of_birth")) ?? text(field(source, "dob"));
+    const nationality = text(field(idDoc, "nationality"));
+    return { name, ...(dateOfBirth ? { dateOfBirth } : {}), ...(nationality ? { nationality } : {}) };
+  }
+  return undefined;
+}
+
 export const dojahKycAdapter: KycAdapter = {
   // No redirectUrl — the widget is embedded, not a redirect. The frontend
   // passes providerReference into the widget as reference_id (Dojah
@@ -84,13 +120,15 @@ export const dojahKycAdapter: KycAdapter = {
     return verifySignature(req.rawBody, req.headers["x-dojah-signature"], requireSecretKey());
   },
 
-  parseWebhookResult(body: unknown): { providerReference: string; decision: "verified" | "rejected" } | null {
+  parseWebhookResult(body: unknown): KycResult | null {
     const parsed = DojahWebhookSchema.safeParse(body);
     if (!parsed.success) return null;
 
     const { reference_id, verification_status, data } = parsed.data;
     if (verification_status === "Completed") {
-      return { providerReference: reference_id, decision: allStepsPassed(data) ? "verified" : "rejected" };
+      if (!allStepsPassed(data)) return { providerReference: reference_id, decision: "rejected" };
+      const subject = extractSubject(data);
+      return { providerReference: reference_id, decision: "verified", ...(subject ? { subject } : {}) };
     }
     if (REJECTED_STATUSES.has(verification_status)) {
       return { providerReference: reference_id, decision: "rejected" };

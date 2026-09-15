@@ -53,7 +53,7 @@ kycRouter.post("/webhooks/kyc", async (req: Request, res: Response) => {
     return;
   }
   try {
-    await resolveKyc(result.providerReference, result.decision);
+    await resolveKyc(result.providerReference, result.decision, result.subject);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
