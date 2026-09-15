@@ -10,6 +10,7 @@ import { PayoutLiquidityError } from "../wallets/adapter.js";
 import { ledgerRepo } from "../ledger/repository.js";
 import { canInitiateSend } from "../sendAuthorization.js";
 import { verifyTransactionPin } from "../pin/service.js";
+import { screenRecipient } from "../aml/recipientScreening.js";
 import { createOfframpOrder, type CreatedOrder } from "./paycrestAdapter.js";
 import { createOfframpOrder as createQuidaxOrder } from "./quidaxAdapter.js";
 import { createOfframpOrder as createCentiivOrder } from "./centiivAdapter.js";
@@ -146,6 +147,30 @@ export async function initiateSend(userId: string, input: InitiateSendInput): Pr
   const pinValid = await verifyTransactionPin(userId, input.pin);
   if (!pinValid) {
     throw new Error("Incorrect PIN");
+  }
+
+  // AML screening of the RECIPIENT (KYC issue #6 follow-up) — a separate,
+  // complementary control from KYC's own sender screening (domain/kyc/
+  // service.ts's resolveKyc): a fully verified, clean sender can still
+  // remit to a sanctioned or high-risk beneficiary. Checked here, before
+  // anything is created or debited, same "hard stop, nothing has happened
+  // yet" shape as the PIN check above — not a mid-flight hold, since
+  // holding partway through this function would mean either debiting the
+  // ledger before screening resolves (leaving the balance unreserved and
+  // spendable elsewhere during the hold) or restructuring this function
+  // into resumable phases. Cached per recipient identity (see
+  // screenRecipient's own comment) — cheap after the first send to any
+  // given recipient, real Dojah cost only on a brand-new one.
+  const recipientScreening = await screenRecipient(input.recipient, input.fiatCurrency);
+  if (recipientScreening.status === "blocked") {
+    throw new Error(
+      "This recipient can't be used for a transfer right now. No funds have been moved. Contact support if you believe this is a mistake.",
+    );
+  }
+  if (recipientScreening.status === "review") {
+    throw new Error(
+      "This recipient needs a quick review before we can send to them — we'll let you know once it's cleared. No funds have been moved.",
+    );
   }
 
   // Real vulnerability closed here: input.existingOrder used to be trusted

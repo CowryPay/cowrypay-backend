@@ -45,6 +45,12 @@ export const env = {
   // Dojah's screening_options.match_threshold (0–1) — lower surfaces more
   // candidate matches (and more false positives for admins to review).
   amlMatchThreshold: Number(process.env.AML_MATCH_THRESHOLD ?? 0.85),
+  // AML screening of remittance RECIPIENTS (KYC issue #6 follow-up) — a
+  // separate flag from amlScreeningEnabled above (which screens the
+  // sender at KYC time) so each can be rolled out independently; this one
+  // needs its own live-verification pass against Dojah before enabling in
+  // production, same as amlScreeningEnabled did.
+  amlRecipientScreeningEnabled: process.env.AML_RECIPIENT_SCREENING_ENABLED === "true",
   // Only required when walletProvider === "blockradar" — checked lazily by
   // that adapter, not here, so mock mode keeps working with these unset.
   blockradarApiKey: process.env.BLOCKRADAR_API_KEY,

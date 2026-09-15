@@ -35,6 +35,7 @@ import {
   type OfframpProvider,
 } from "../offramp/providerSelection.js";
 import { computeFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
+import { screenRecipient } from "../aml/recipientScreening.js";
 import { getTokenConfig, SUPPORTED_CHAINS as EVM_CHAINS } from "../wallets/chains.js";
 import { recipientsRepo } from "../recipients/repository.js";
 import { walletsRepo } from "../wallets/repository.js";
@@ -154,6 +155,27 @@ async function finalizeRemittanceDraft(
   chainHint?: string,
   tokenHint?: string,
 ): Promise<RemittanceResolution> {
+  // AML screening of the RECIPIENT (KYC issue #6 follow-up) — checked as
+  // early as possible so the chat flow tells the user before locking a
+  // real rate/order with a provider, not after. This is UX only: the real,
+  // non-bypassable enforcement is initiateSend's own identical check
+  // (offramp/service.ts) — a caller that skips chat entirely still can't
+  // get past that one. Cached per recipient identity, so this costs
+  // nothing extra once a recipient's been screened before.
+  const recipientScreening = await screenRecipient(recipient, fiatCurrency);
+  if (recipientScreening.status === "blocked") {
+    return {
+      ok: false,
+      message: "This recipient can't be used for a transfer right now. No funds have been moved. Contact support if you believe this is a mistake.",
+    };
+  }
+  if (recipientScreening.status === "review") {
+    return {
+      ok: false,
+      message: "This recipient needs a quick review before we can send to them — we'll let you know once it's cleared. No funds have been moved.",
+    };
+  }
+
   const wallet = await walletsRepo.findByUserIdAndChain(userId, env.defaultChain);
   if (!wallet) return { ok: false, message: `I couldn't find your wallet — try again in a moment.` };
   const walletAddress = wallet.address;

@@ -53,7 +53,12 @@ describe("POST /webhooks/kyc with KYC_PROVIDER=dojah", () => {
   it("resolves a correctly signed Dojah webhook without an admin key", async () => {
     const res = await post(dojahBody, { "x-dojah-signature": sign(dojahBody) });
     expect(res.status).toBe(200);
-    expect(resolveKyc).toHaveBeenCalledWith("dojah_0b7c8a4e-1111-4222-8333-944455556666", "verified");
+    // Checked positionally, not via toHaveBeenCalledWith(...) — that method
+    // requires an exact argument-count match, and resolveKyc gained a third
+    // (optional) `subject` param in #11 that this test doesn't care about.
+    const [providerReference, decision] = resolveKyc.mock.calls[0] ?? [];
+    expect(providerReference).toBe("dojah_0b7c8a4e-1111-4222-8333-944455556666");
+    expect(decision).toBe("verified");
   });
 
   it("rejects an unsigned request", async () => {
@@ -89,6 +94,9 @@ describe("POST /webhooks/kyc with KYC_PROVIDER=mock", () => {
     env.kycProvider = "mock";
     const res = await post(mockBody, { "x-admin-key": "admin_key" });
     expect(res.status).toBe(200);
-    expect(resolveKyc).toHaveBeenCalledWith("mock_ref_1234", "verified");
+    // See the Dojah test above for why this is positional, not toHaveBeenCalledWith(...).
+    const [providerReference, decision] = resolveKyc.mock.calls[0] ?? [];
+    expect(providerReference).toBe("mock_ref_1234");
+    expect(decision).toBe("verified");
   });
 });
