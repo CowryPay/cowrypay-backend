@@ -1,3 +1,18 @@
+// Identity details the vendor actually verified (from the ID document or
+// government registry, not what the user typed) — what AML screening runs
+// against (KYC issue #6). Optional: not every vendor or flow returns them.
+export interface KycSubject {
+  name: string;
+  dateOfBirth?: string;
+  nationality?: string;
+}
+
+export interface KycResult {
+  providerReference: string;
+  decision: "verified" | "rejected";
+  subject?: KycSubject;
+}
+
 export interface KycSession {
   providerReference: string;
   // Where the client sends the user to complete ID + liveness verification.
@@ -43,5 +58,5 @@ export interface KycAdapter {
   // per-step result inspected). Returns null for a payload that doesn't
   // parse OR a legitimate non-terminal event (e.g. still in progress) —
   // both cases mean "nothing to resolve yet," not an error worth a 400.
-  parseWebhookResult(body: unknown): { providerReference: string; decision: "verified" | "rejected" } | null;
+  parseWebhookResult(body: unknown): KycResult | null;
 }

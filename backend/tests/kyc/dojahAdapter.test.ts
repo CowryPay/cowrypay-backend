@@ -104,6 +104,49 @@ describe("dojahKycAdapter.parseWebhookResult", () => {
     expect(dojahKycAdapter.parseWebhookResult(payload({ verification_status }))).toBeNull();
   });
 
+  describe("verified subject for AML screening", () => {
+    const withData = (extra: Record<string, unknown>) => {
+      const body = payload();
+      body.data = { ...body.data, ...extra };
+      return body;
+    };
+    const idDoc = { status: true, message: "", data: { id_data: { first_name: "Doc", last_name: "Name", date_of_birth: "1991-02-02", nationality: "Nigerian" } } };
+    const typed = { status: true, message: "", data: { first_name: "Typed", last_name: "Name", dob: "1993-03-03" } };
+    const registry = {
+      status: true,
+      message: "",
+      data: { nin: { entity: { first_name: "JOHN", middle_name: "PAUL", last_name: "DOE", date_of_birth: "1992-10-10" } } },
+    };
+
+    it("prefers the government registry record over the ID document and typed data", () => {
+      expect(dojahKycAdapter.parseWebhookResult(withData({ government_data: registry, id: idDoc, user_data: typed }))?.subject).toEqual({
+        name: "JOHN PAUL DOE",
+        dateOfBirth: "1992-10-10",
+        nationality: "Nigerian",
+      });
+    });
+
+    it("falls back to the ID document, then to typed user_data", () => {
+      expect(dojahKycAdapter.parseWebhookResult(withData({ id: idDoc, user_data: typed }))?.subject).toEqual({
+        name: "Doc Name",
+        dateOfBirth: "1991-02-02",
+        nationality: "Nigerian",
+      });
+      expect(dojahKycAdapter.parseWebhookResult(withData({ user_data: typed }))?.subject).toEqual({
+        name: "Typed Name",
+        dateOfBirth: "1993-03-03",
+      });
+    });
+
+    it("omits subject when no source has a full name, and never on a rejection", () => {
+      expect(dojahKycAdapter.parseWebhookResult(payload())).not.toHaveProperty("subject");
+      expect(dojahKycAdapter.parseWebhookResult(withData({ user_data: typed, address: step(false) }))).toEqual({
+        providerReference: ref,
+        decision: "rejected",
+      });
+    });
+  });
+
   it("returns null for an unparseable body", () => {
     expect(dojahKycAdapter.parseWebhookResult(payload({ reference_id: undefined }))).toBeNull();
     expect(dojahKycAdapter.parseWebhookResult("not json")).toBeNull();

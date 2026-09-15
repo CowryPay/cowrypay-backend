@@ -36,6 +36,15 @@ export const env = {
   dojahPublicKey: process.env.DOJAH_PUBLIC_KEY,
   dojahSecretKey: process.env.DOJAH_SECRET_KEY,
   dojahWidgetId: process.env.DOJAH_WIDGET_ID,
+  dojahBaseUrl: process.env.DOJAH_BASE_URL ?? "https://api.dojah.io",
+  // AML/watchlist screening at KYC completion (KYC issue #6). Opt-in, not
+  // on by default: every screen is a billed Dojah call, and turning it on
+  // starts holding/blocking users, so an existing deployment shouldn't pick
+  // that up silently. Uses dojahAppId + dojahSecretKey above.
+  amlScreeningEnabled: process.env.AML_SCREENING_ENABLED === "true",
+  // Dojah's screening_options.match_threshold (0–1) — lower surfaces more
+  // candidate matches (and more false positives for admins to review).
+  amlMatchThreshold: Number(process.env.AML_MATCH_THRESHOLD ?? 0.85),
   // Only required when walletProvider === "blockradar" — checked lazily by
   // that adapter, not here, so mock mode keeps working with these unset.
   blockradarApiKey: process.env.BLOCKRADAR_API_KEY,
