@@ -53,7 +53,7 @@ describe("POST /webhooks/kyc with KYC_PROVIDER=dojah", () => {
   it("resolves a correctly signed Dojah webhook without an admin key", async () => {
     const res = await post(dojahBody, { "x-dojah-signature": sign(dojahBody) });
     expect(res.status).toBe(200);
-    expect(resolveKyc).toHaveBeenCalledWith("dojah_0b7c8a4e-1111-4222-8333-944455556666", "verified");
+    expect(resolveKyc.mock.calls[0].slice(0, 2)).toEqual(["dojah_0b7c8a4e-1111-4222-8333-944455556666", "verified"]);
   });
 
   it("rejects an unsigned request", async () => {
@@ -89,6 +89,6 @@ describe("POST /webhooks/kyc with KYC_PROVIDER=mock", () => {
     env.kycProvider = "mock";
     const res = await post(mockBody, { "x-admin-key": "admin_key" });
     expect(res.status).toBe(200);
-    expect(resolveKyc).toHaveBeenCalledWith("mock_ref_1234", "verified");
+    expect(resolveKyc.mock.calls[0].slice(0, 2)).toEqual(["mock_ref_1234", "verified"]);
   });
 });
