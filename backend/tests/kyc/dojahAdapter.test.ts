@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // env.ts throws at import without DATABASE_URL/SUPABASE_URL — the adapter
 // only needs the Dojah secret, so mock just that.
-vi.mock("../../src/config/env.js", () => ({ env: { dojahSecretKey: "test_secret" } }));
+vi.mock("../../src/config/env.js", () => ({ env: { dojahSecretKey: "test_secret", dojahWebhookSecret: "test_secret" } }));
 
 const { dojahKycAdapter } = await import("../../src/domain/kyc/dojahAdapter.js");
 

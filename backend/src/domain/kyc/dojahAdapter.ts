@@ -16,6 +16,19 @@ function requireSecretKey(): string {
   return env.dojahSecretKey;
 }
 
+// A DIFFERENT secret from the one above — confirmed live (2026-09-16): a
+// real webhook delivery 401'd when checked against DOJAH_SECRET_KEY (the
+// account/API secret, used for our own outbound calls). Dojah's
+// Developers -> Webhooks page shows a separate, per-subscription secret
+// specifically for signing x-dojah-signature. See env.ts's own comment on
+// dojahWebhookSecret for the fallback behavior.
+function requireWebhookSecret(): string {
+  if (!env.dojahWebhookSecret) {
+    throw new Error("DOJAH_WEBHOOK_SECRET (or DOJAH_SECRET_KEY) must be set for KYC_PROVIDER=dojah");
+  }
+  return env.dojahWebhookSecret;
+}
+
 // docs.dojah.io/docs/technical-reference/verify-events — x-dojah-signature
 // is HMAC-SHA256 (hex) of the body keyed with the secret key. Computed over
 // the RAW body, never a re-serialized JSON.stringify(req.body), which can
@@ -117,7 +130,7 @@ export const dojahKycAdapter: KycAdapter = {
   },
 
   verifyWebhookSignature(req: WebhookRequest): boolean {
-    return verifySignature(req.rawBody, req.headers["x-dojah-signature"], requireSecretKey());
+    return verifySignature(req.rawBody, req.headers["x-dojah-signature"], requireWebhookSecret());
   },
 
   parseWebhookResult(body: unknown): KycResult | null {

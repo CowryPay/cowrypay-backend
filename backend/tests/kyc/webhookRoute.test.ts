@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const env = vi.hoisted(() => ({ kycProvider: "dojah", dojahSecretKey: "test_secret", adminApiKey: "admin_key" }));
+const env = vi.hoisted(() => ({
+  kycProvider: "dojah",
+  dojahSecretKey: "test_secret",
+  dojahWebhookSecret: "test_secret",
+  adminApiKey: "admin_key",
+}));
 const resolveKyc = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/config/env.js", () => ({ env }));

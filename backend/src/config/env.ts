@@ -34,7 +34,23 @@ export const env = {
   // country, liveness/selfie-match) — a widget can't launch without one.
   dojahAppId: process.env.DOJAH_APP_ID,
   dojahPublicKey: process.env.DOJAH_PUBLIC_KEY,
+  // The account/API secret — sent as the Authorization header on OUTBOUND
+  // calls we make to Dojah (AML screening in dojahScreening.ts). NOT the
+  // same secret as the one below, confirmed live (2026-09-16): a real
+  // webhook delivery 401'd against this key, and Dojah's Developers ->
+  // Webhooks page shows a separate, per-subscription secret specifically
+  // for signing webhook payloads. Conflating the two breaks whichever
+  // half isn't currently holding the value it needs.
   dojahSecretKey: process.env.DOJAH_SECRET_KEY,
+  // The webhook-specific signing secret shown on Dojah's Developers ->
+  // Webhooks page for this subscription — used ONLY to verify
+  // x-dojah-signature on an INBOUND /webhooks/kyc delivery
+  // (dojahAdapter.ts's verifyWebhookSignature). Falls back to
+  // dojahSecretKey if unset, matching this variable's behavior before the
+  // mismatch above was found live, so an existing deployment that hasn't
+  // set this yet doesn't regress further — but the real, correct value is
+  // the webhook subscription's own secret, not the API one.
+  dojahWebhookSecret: process.env.DOJAH_WEBHOOK_SECRET ?? process.env.DOJAH_SECRET_KEY,
   dojahWidgetId: process.env.DOJAH_WIDGET_ID,
   dojahBaseUrl: process.env.DOJAH_BASE_URL ?? "https://api.dojah.io",
   // AML/watchlist screening at KYC completion (KYC issue #6). Opt-in, not
