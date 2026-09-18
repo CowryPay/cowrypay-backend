@@ -56,15 +56,26 @@ export function classifyIntent(message: string): ChatIntent {
 // Optimism dropped (2026-08) — no off-ramp provider actually supports it
 // (Quidax never did; Paycrest sends on it never settled in practice
 // either, confirmed via /admin/metrics showing zero completed sends on it
-// despite real deposits landing there). Deliberately NOT removed from
-// wallets/chains.ts's SUPPORTED_CHAINS — that list still drives deposit
-// scanning/sweeping/gas monitoring, which must keep watching it: the
-// address is the same one shared across every EVM chain (one KMS key), so
-// someone could still send USDC there by accident even though we no
-// longer offer it as a deposit option, and an existing balance there (if
-// any) must stay off-rampable via the dynamic fundedChains check in
-// remittanceDraft.ts, which never depended on this list to begin with.
-export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana", "ethereum"] as const;
+// despite real deposits landing there).
+//
+// Ethereum dropped (2026-09-18) — an operator decision, not a provider
+// gap like Optimism's: mainnet gas cost and volatility made a single day
+// of real off-ramp activity require repeated manual intervention (a
+// nonce-tracking bug that could strand a payout forever, a static
+// gas-top-up guess that leaked ~$12 of unrecoverable dust per sweep, and
+// multiple stuck transactions needing hands-on recovery) — judged not
+// worth it against how rarely users actually funded from Ethereum
+// specifically versus the cheaper L2s/Stellar/Solana.
+//
+// Both deliberately NOT removed from wallets/chains.ts's SUPPORTED_CHAINS
+// — that list still drives deposit scanning/sweeping/gas monitoring,
+// which must keep watching them: the address is the same one shared
+// across every EVM chain (one KMS key), so someone could still send USDC
+// to either chain by accident even though we no longer offer them as a
+// deposit option, and an existing balance on either (if any) must stay
+// off-rampable via the dynamic fundedChains check in remittanceDraft.ts,
+// which never depended on this list to begin with.
+export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana"] as const;
 
 // "address" is included as its own trigger, not just "deposit"/"top up"/
 // etc — found live that "what's my solana address" has no "deposit" in it
