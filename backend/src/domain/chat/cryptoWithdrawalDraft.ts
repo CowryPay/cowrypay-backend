@@ -12,7 +12,19 @@ import { env } from "../../config/env.js";
 import { formatAmount } from "../../utils/format.js";
 import type { ParsedIntent } from "./schemas.js";
 
-const ALL_WITHDRAW_CHAINS = [...EVM_CHAINS.filter((c) => c !== "mock-chain"), "stellar", "solana"];
+// Ethereum excluded here (2026-09-18, operator decision — see
+// ai-agent/chat/intent.ts's DEPOSIT_CHAINS for the same call on deposits)
+// — NOT removed from wallets/chains.ts's SUPPORTED_CHAINS itself, which
+// this still derives from. Every EVM chain here shares one deposit
+// address (one KMS key), so someone can still send USDC to it on
+// Ethereum mainnet whether it's offered or not; keeping it in the
+// registry is what lets that still be detected, swept, and manually
+// recovered rather than becoming permanently invisible to the deposit
+// scanner. This array only controls what a user can newly CHOOSE to
+// withdraw from going forward (both the offered list and the validation
+// below reject an explicit "ethereum" request the same way) — it says
+// nothing about whether Ethereum funds can ever move again.
+const ALL_WITHDRAW_CHAINS = [...EVM_CHAINS.filter((c) => c !== "mock-chain" && c !== "ethereum"), "stellar", "solana"];
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
