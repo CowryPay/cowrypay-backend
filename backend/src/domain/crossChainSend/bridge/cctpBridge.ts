@@ -7,7 +7,7 @@ import type { ChainDefinition } from "@circle-fin/bridge-kit";
 import { env } from "../../../config/env.js";
 import { getChainConfig } from "../../wallets/chains.js";
 import { getWalletAddress, kmsAccountFromKey } from "../../wallets/awsKmsAdapter.js";
-import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "../../wallets/evmNonce.js";
+import { fetchPendingNonce, withClaimedNonce } from "../../wallets/evmNonce.js";
 import { getSolanaTreasurySigner } from "../../wallets/solanaKms.js";
 import { CHAIN_DEFINITIONS, getChainDefinition } from "./chainDefinitions.js";
 import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult } from "./adapter.js";
@@ -176,13 +176,7 @@ export async function withSharedNonce<T>(chain: string, run: (nonce: number) => 
   const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn!);
   const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
 
-  try {
-    return await run(await claimNonce(chain, fetchFreshNonce));
-  } catch (err) {
-    if (!isNonceError(err)) throw err;
-    resyncNonce(chain);
-    return await run(await claimNonce(chain, fetchFreshNonce));
-  }
+  return withClaimedNonce(chain, fetchFreshNonce, run);
 }
 
 // The provider's WalletContext.chain type requires ChainDefinitionWithCCTPv2

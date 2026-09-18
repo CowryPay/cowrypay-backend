@@ -15,7 +15,7 @@ import {
 import { env } from "../../config/env.js";
 import { getChainConfig, getTokenConfig } from "./chains.js";
 import { PayoutLiquidityError, type CreatedWallet, type WalletAdapter, type WithdrawInput, type WithdrawResult } from "./adapter.js";
-import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "./evmNonce.js";
+import { fetchPendingNonce, withClaimedNonce } from "./evmNonce.js";
 import { withAdvisoryLock } from "../../db/advisoryLock.js";
 
 function requireAwsConfig(): { region: string; accessKeyId: string; secretAccessKey: string } {
@@ -276,21 +276,9 @@ export const awsKmsWalletAdapter: WalletAdapter = {
       // chain, same lock key depositSweeper.ts's gas top-up uses, since
       // both send from this same payout wallet and must exclude each
       // other too, not just other withdraw() calls.
-      txHash = await withAdvisoryLock(`evm-nonce:${input.chain}`, async () => {
-        const nonce = await claimNonce(input.chain, fetchFreshNonce);
-        try {
-          return await send(nonce);
-        } catch (err) {
-          // The in-memory nonce cache turned out to be wrong (first use
-          // after a restart racing an old transaction, or truly out-of-band
-          // activity on this key) — resync from the chain and retry exactly
-          // once with a freshly-fetched nonce before giving up.
-          if (!isNonceError(err)) throw err;
-          resyncNonce(input.chain);
-          const freshNonce = await claimNonce(input.chain, fetchFreshNonce);
-          return await send(freshNonce);
-        }
-      });
+      txHash = await withAdvisoryLock(`evm-nonce:${input.chain}`, () =>
+        withClaimedNonce(input.chain, fetchFreshNonce, send),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // The user's own ledger balance was already checked and atomically
@@ -343,15 +331,5 @@ export async function sendNativeToken(chain: string, toAddress: `0x${string}`, a
     return walletClient.sendTransaction({ to: toAddress, value, nonce });
   }
 
-  return withAdvisoryLock(`evm-nonce:${chain}`, async () => {
-    const nonce = await claimNonce(chain, fetchFreshNonce);
-    try {
-      return await send(nonce);
-    } catch (err) {
-      if (!isNonceError(err)) throw err;
-      resyncNonce(chain);
-      const freshNonce = await claimNonce(chain, fetchFreshNonce);
-      return await send(freshNonce);
-    }
-  });
+  return withAdvisoryLock(`evm-nonce:${chain}`, () => withClaimedNonce(chain, fetchFreshNonce, send));
 }

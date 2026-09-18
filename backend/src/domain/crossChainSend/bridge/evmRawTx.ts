@@ -2,7 +2,7 @@ import { createWalletClient, http } from "viem";
 import { env } from "../../../config/env.js";
 import { getChainConfig } from "../../wallets/chains.js";
 import { getWalletAddress, kmsAccountFromKey } from "../../wallets/awsKmsAdapter.js";
-import { claimNonce, resyncNonce, isNonceError, fetchPendingNonce } from "../../wallets/evmNonce.js";
+import { fetchPendingNonce, withClaimedNonce } from "../../wallets/evmNonce.js";
 
 // Shared "sign and broadcast a raw {to, data, value} transaction from the
 // KMS payout wallet, coordinated through the one shared in-process nonce
@@ -21,16 +21,5 @@ export async function sendRawEvmTx(chain: string, to: `0x${string}`, data: `0x${
   const walletClient = createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
   const fetchFreshNonce = fetchPendingNonce(viemChain, rpcUrl, payoutAddress);
 
-  async function attempt(): Promise<string> {
-    const nonce = await claimNonce(chain, fetchFreshNonce);
-    return walletClient.sendTransaction({ to, data, value, nonce });
-  }
-
-  try {
-    return await attempt();
-  } catch (err) {
-    if (!isNonceError(err)) throw err;
-    resyncNonce(chain);
-    return await attempt();
-  }
+  return withClaimedNonce(chain, fetchFreshNonce, (nonce) => walletClient.sendTransaction({ to, data, value, nonce }));
 }

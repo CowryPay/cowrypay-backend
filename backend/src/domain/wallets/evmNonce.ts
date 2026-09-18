@@ -56,7 +56,63 @@ export function isNonceError(err: unknown): boolean {
   );
 }
 
+// Gives a claimed nonce back for reuse when the transaction that claimed
+// it never actually broadcast. Real incident (2026-09-18): claimNonce
+// reserves a nonce the instant it's called, before the send is known to
+// succeed — every one of this module's callers used to release/resync
+// the cache only for a RECOGNIZED nonce-conflict error (isNonceError),
+// silently burning the nonce forever on any other failure (insufficient
+// balance, an RPC hiccup, anything). That leaves a permanent gap: the
+// next claim moves on to n+1, and every later send from that chain's
+// payout wallet gets stuck behind the unfillable gap at n — recoverable
+// only by restarting the process to force a full resync.
+//
+// Only safe to roll back when nothing has claimed a LATER nonce in the
+// meantime — checked by identity: `claimedPromise` must still be the
+// exact promise this chain's cache holds. If something else already
+// claimed on top of it, rolling back would collide with that concurrent
+// claim, so this is a no-op in that case (the advisory lock every real
+// caller wraps claim+send in already excludes concurrent callers for the
+// same chain in the normal case; this only guards the remaining edge).
+function releaseNonce(chain: string, claimedPromise: Promise<number>, nonce: number): void {
+  if (nonceChains.get(chain) === claimedPromise) {
+    nonceChains.set(chain, Promise.resolve(nonce - 1));
+  }
+}
+
 export function fetchPendingNonce(viemChain: Chain, rpcUrl: string, address: `0x${string}`): () => Promise<number> {
   const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
   return () => publicClient.getTransactionCount({ address, blockTag: "pending" });
+}
+
+// Claims a nonce, runs `send` with it, and releases the nonce on ANY
+// failure (see releaseNonce) before deciding what to do next — this is
+// the one place the incident above is actually closed; every call site
+// used to hand-roll this same claim/catch/resync shape with the bug
+// baked into each copy. A recognized nonce error still gets exactly one
+// resync-and-retry with a freshly-claimed nonce, same as every call site
+// already did; the retry attempt's own nonce is released too if it also
+// fails, rather than reintroducing the same leak on the retry path.
+export async function withClaimedNonce<T>(
+  chain: string,
+  fetchFresh: () => Promise<number>,
+  send: (nonce: number) => Promise<T>,
+): Promise<T> {
+  const claimedPromise = claimNonce(chain, fetchFresh);
+  const nonce = await claimedPromise;
+  try {
+    return await send(nonce);
+  } catch (err) {
+    releaseNonce(chain, claimedPromise, nonce);
+    if (!isNonceError(err)) throw err;
+    resyncNonce(chain);
+    const retryPromise = claimNonce(chain, fetchFresh);
+    const retryNonce = await retryPromise;
+    try {
+      return await send(retryNonce);
+    } catch (retryErr) {
+      releaseNonce(chain, retryPromise, retryNonce);
+      throw retryErr;
+    }
+  }
 }
