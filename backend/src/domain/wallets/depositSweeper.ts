@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, encodeFunctionData } from "viem";
+import { createPublicClient, createWalletClient, http, encodeFunctionData, type PublicClient } from "viem";
 import { env } from "../../config/env.js";
 import { walletsRepo } from "./repository.js";
 import { kmsAccountFromKey, getWalletAddress } from "./awsKmsAdapter.js";
@@ -26,6 +26,52 @@ const ERC20_ABI = [
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
+
+// A real transfer() call on every chain this registry lists has been
+// observed at 62-65k gas (see chains.ts's own comments) — rounded up for
+// margin rather than trusting that exact figure to hold on every chain.
+const SWEEP_GAS_LIMIT_ESTIMATE = 70_000n;
+// Covers gas price moving between this estimate and the moment the
+// deposit wallet actually broadcasts its own sweep transaction moments
+// later — not a guess at "usually enough", since the estimate itself is
+// already live.
+const GAS_TOPUP_SAFETY_MULTIPLIER = 3n;
+// Real incident (2026-09-18): every chain here used to have a fixed
+// gasTopUpAmount constant in chains.ts (see that file's own comment on
+// Ethereum's specifically) — calibrated once against an assumed gas
+// price and never revisited. On Ethereum, the actual configured value
+// was ~7x higher than even its own documented "cautious baseline" would
+// require, and didn't scale DOWN when real gas was far cheaper than that
+// baseline — silently sending ~$12 of unrecoverable dust into a user's
+// own deposit wallet on every single top-up (the excess just sits there,
+// spent on nothing), which is why the shared payout wallet kept running
+// dry no matter how many times it was manually refunded. This replaces
+// that fixed guess with a live one, computed fresh at the moment a
+// wallet actually needs topping up — cheap when the network is cheap,
+// and (unlike a static guess) automatically scales up during a real
+// congestion spike instead of getting stuck on an outdated assumption.
+//
+// The floor and ceiling are derived from THIS chain's own
+// gasBufferThreshold, not a shared absolute number — verified live before
+// this shipped: a first version used one flat wei bound for every chain,
+// which silently broke Celo (whose native token isn't priced anywhere
+// near ETH) by clamping a correctly-computed ~0.05 CELO estimate down to
+// an ETH-scaled 0.02, undershooting what Celo transfers actually cost by
+// more than half. gasBufferThreshold is already calibrated per chain to
+// that chain's own real order of magnitude (0.02 CELO vs 0.00003 ETH on
+// the L2s vs 0.002 ETH on mainnet), so scaling off it keeps the floor/
+// ceiling correctly chain-relative for free.
+async function estimateGasTopUp(chain: string, publicClient: PublicClient): Promise<bigint> {
+  const { gasBufferThreshold } = getChainConfig(chain);
+  const fees = await publicClient.estimateFeesPerGas();
+  const perGas = fees.maxFeePerGas ?? (await publicClient.getGasPrice());
+  const estimate = SWEEP_GAS_LIMIT_ESTIMATE * perGas * GAS_TOPUP_SAFETY_MULTIPLIER;
+  const min = gasBufferThreshold / 2n;
+  const max = gasBufferThreshold * 10n;
+  if (estimate < min) return min;
+  if (estimate > max) return max;
+  return estimate;
+}
 
 const TOPUP_CONFIRM_ATTEMPTS = 10;
 const TOPUP_CONFIRM_DELAY_MS = 3_000;
@@ -66,7 +112,7 @@ export async function sweepWallet(
   wallet: SweepableWallet,
   payout: SweepablePayout,
 ): Promise<boolean> {
-  const { viemChain, rpcUrl, gasTopUpAmount, gasBufferThreshold } = getChainConfig(chain);
+  const { viemChain, rpcUrl } = getChainConfig(chain);
   const { address: tokenAddress } = getTokenConfig(chain, tokenSymbol);
   const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
   const address = wallet.address as `0x${string}`;
@@ -80,7 +126,15 @@ export async function sweepWallet(
   if (tokenBalance < MIN_SWEEP_TOKEN_AMOUNT) return false;
 
   const nativeBalance = await publicClient.getBalance({ address });
-  if (nativeBalance < gasBufferThreshold) {
+  const gasTopUpAmount = await estimateGasTopUp(chain, publicClient);
+  // Compared against a FRESH estimate every cycle, not a fixed old
+  // threshold — closes the exact stuck-forever bug chains.ts's own Celo
+  // comment describes (a wallet topped up once sits above a static
+  // threshold forever even after gas prices move, since nothing ever
+  // re-checks against the new reality). Topping up whenever the balance
+  // is under half of what's needed RIGHT NOW self-corrects on its own if
+  // gas gets more expensive later.
+  if (nativeBalance < gasTopUpAmount / 2n) {
     const payoutAccount = kmsAccountFromKey(payout.keyArn, payout.address);
     const payoutWalletClient = createWalletClient({ account: payoutAccount, chain: viemChain, transport: http(rpcUrl) });
     // Shares evmNonce.ts's cache with awsKmsAdapter.ts's withdraw() — both

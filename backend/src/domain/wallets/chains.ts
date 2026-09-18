@@ -17,8 +17,12 @@ export interface ChainConfig {
   // in every caller.
   tokens: Record<string, TokenConfig>;
   // Native token, chain-specific — ETH on the L2s below is a very
-  // different order of value than CELO, so these aren't shared constants.
-  gasTopUpAmount: bigint;
+  // different order of value than CELO, so this isn't a shared constant.
+  // Only used by gasStatusMonitor.ts to alert on the PAYOUT wallet's own
+  // balance — how much to actually top up a user's deposit wallet is
+  // computed dynamically now (see depositSweeper.ts's estimateGasTopUp),
+  // not a second static guess here (see that file's own comment on the
+  // real incident a fixed gasTopUpAmount caused).
   gasBufferThreshold: bigint;
 }
 
@@ -39,19 +43,16 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
       // above. symbol() actually returns "USD₮", displayed/traded as USDT.
       USDT: { address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", decimals: 6 },
     },
-    // Confirmed live that the previous values (0.01 / 0.005) were no longer
-    // sufficient: at a real, current Celo gas price of 202.5 gwei, one
-    // standard ERC-20 transfer costs ~0.0132 CELO — above both the old
-    // top-up amount AND the old buffer threshold, which produced a
-    // real, permanently-stuck failure mode: a wallet topped up to exactly
-    // 0.01 CELO sits *above* a 0.005 threshold (so no further top-up ever
-    // triggers) while still genuinely short of what a transfer costs,
-    // wedging that wallet's sweep forever until manually intervened.
-    // Raised with real margin over today's cost (not just "many times
-    // over" as an untested claim) — still a fixed constant, not a dynamic
-    // estimate, for the same zero-balance-sender reason as before, but
-    // sized against an actual observed price rather than an assumption.
-    gasTopUpAmount: parseEther("0.05"),
+    // Real incident this threshold's own history warns about: an earlier
+    // static top-up amount (0.01 CELO) topped a wallet up to sit *above* an
+    // equally-static 0.005 threshold while still genuinely short of what a
+    // real transfer cost (0.0132 CELO at a real observed 202.5 gwei) —
+    // wedging that wallet's sweep forever, since no further top-up ever
+    // triggered. The top-up amount itself is computed dynamically now (see
+    // depositSweeper.ts's estimateGasTopUp) specifically to stop recurring
+    // this same class of bug; this threshold only gates gasStatusMonitor.ts's
+    // alert on the shared PAYOUT wallet's own balance, kept with real
+    // margin over a normal transfer's cost.
     gasBufferThreshold: parseEther("0.02"),
   },
   base: {
@@ -65,11 +66,10 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     tokens: {
       USDC: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
     },
-    // Base is an L2 with very cheap gas (a standard ERC-20 transfer costs a
-    // small fraction of this) — a starting point, worth tuning
-    // operationally rather than treated as precisely calibrated. Lowered
-    // from an initial, overly generous 0.0005 after real-world testing.
-    gasTopUpAmount: parseEther("0.0001"),
+    // Base is an L2 with very cheap gas — this only gates
+    // gasStatusMonitor.ts's alert on the payout wallet's own balance now
+    // (see depositSweeper.ts's estimateGasTopUp for how much a user's
+    // deposit wallet actually gets topped up, computed dynamically).
     gasBufferThreshold: parseEther("0.00003"),
   },
   // No off-ramp provider actually supports Optimism in practice (2026-08) —
@@ -86,29 +86,34 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
     tokens: {
       USDC: { address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6 },
     },
-    gasTopUpAmount: parseEther("0.0001"),
     gasBufferThreshold: parseEther("0.00003"),
   },
   // Verified live (2026-09-01): symbol()/decimals() eth_call against the
   // contract itself (not trusted from memory) returned "USDC"/6 exactly.
-  // Gas constants are NOT sized off Base/Optimism's cents-level costs —
-  // Ethereum mainnet gas is a different order of magnitude (a plain USDC
-  // transfer real eth_estimateGas'd at 63,054 gas, in the same ~65k range
-  // as every other chain here) and, critically, far more volatile than
-  // any L2 this registry lists: real baseFee+priority at the time this
-  // was sized was ~0.2 gwei (a standard transfer would cost ~$0.03), but
-  // gas here can spike 50-100x during real congestion in a way Celo/Base/
-  // Optimism essentially never do. Sized against a deliberately more
-  // cautious ~10 gwei baseline instead of that quiet observed price —
-  // gasStatusMonitor.ts is what's relied on to catch a genuine spike
-  // beyond this, not a bigger static buffer.
+  // Ethereum mainnet gas is a different order of magnitude from the L2s
+  // above (a plain USDC transfer real eth_estimateGas'd at 63,054 gas, in
+  // the same ~65k range as every other chain here) and, critically, far
+  // more volatile — real baseFee+priority observed as low as ~0.2-0.4
+  // gwei one moment (a standard transfer costs ~$0.03-0.06 then) but able
+  // to spike 50-100x during real congestion in a way Celo/Base/Optimism
+  // essentially never do.
+  //
+  // Real incident (2026-09-18): a static top-up amount here (0.005 ETH,
+  // nominally "a cautious ~10 gwei baseline") was actually ~7x more than
+  // that baseline math requires, and didn't scale DOWN when real gas was
+  // far cheaper — silently sending ~$12 of unrecoverable dust into a
+  // user's own deposit wallet on every single top-up, which is why the
+  // shared payout wallet kept running dry despite repeated manual
+  // funding. Fixed by computing the top-up dynamically against the
+  // CURRENT price instead of guessing a fixed one (see
+  // depositSweeper.ts's estimateGasTopUp) — this threshold only gates
+  // gasStatusMonitor.ts's alert on the payout wallet's own balance now.
   ethereum: {
     viemChain: mainnet,
     rpcUrl: env.ethereumRpcUrl,
     tokens: {
       USDC: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
     },
-    gasTopUpAmount: parseEther("0.005"),
     gasBufferThreshold: parseEther("0.002"),
   },
 };
