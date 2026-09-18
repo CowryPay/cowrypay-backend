@@ -250,14 +250,21 @@ adminRouter.post("/admin/sends/:id/retry-fee-sweep", async (req: Request, res: R
     res.status(400).json({ error: "this send has no treasury address recorded" });
     return;
   }
-  const wallet = await walletsRepo.findByUserIdAndChain(send.userId, send.chain);
-  if (!wallet) {
-    res.status(400).json({ error: `no ${send.chain} wallet found for this send's user` });
-    return;
-  }
 
   try {
-    const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(send.chain, wallet.provider), {
+    // No wallet lookup needed to pick the adapter — getWalletAdapter
+    // already defaults to the globally-configured env.walletProvider when
+    // no explicit provider is given (see wallets/index.ts), which is
+    // exactly what this always resolved to anyway. Real bug this closes
+    // (2026-09-18): the previous walletsRepo.findByUserIdAndChain(userId,
+    // send.chain) lookup assumed one wallet row per specific EVM chain,
+    // but a user's EVM wallet is ONE row shared across every EVM chain
+    // (one KMS key, valid everywhere — see chains.ts), stored under
+    // whatever chain it happened to be created against. A user whose row
+    // was created on, say, Celo would fail this lookup entirely for an
+    // Ethereum fee sweep — "no ethereum wallet found for this send's
+    // user" — even though nothing about the actual sweep needed that row.
+    const feeSweep = await withdrawWithDroppedTxRetry(getWalletAdapter(send.chain), {
       chain: send.chain,
       tokenSymbol: send.tokenSymbol,
       toAddress: send.treasuryAddress,
