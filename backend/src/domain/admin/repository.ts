@@ -734,22 +734,44 @@ export const adminRepo = {
     }));
   },
 
-  // Persisted "already alerted" state for doubleCreditMonitor.ts — real
-  // incident (2026-09-08): the original in-memory Set this replaced reset
-  // on every deploy, and findDoubleCreditedDeposits' underlying signal (a
-  // deposit with >1 BALANCE_CREDITED transition, scanned from permanent
-  // history) never stops being true once it's true, even after the
-  // balance is manually corrected — so every deploy's first 5-minute check
-  // re-"discovered" every already-known, already-fixed deposit as new and
-  // re-alerted on Telegram, forever. See migration 0021's own comment.
-  async filterUnalertedDoubleCredits(depositIds: string[]): Promise<string[]> {
-    if (depositIds.length === 0) return [];
-    const { rows } = await pool.query(
-      `select deposit_id from double_credit_alerts where deposit_id = any($1::uuid[])`,
-      [depositIds],
-    );
-    const alreadyAlerted = new Set(rows.map((r) => r.deposit_id));
-    return depositIds.filter((id) => !alreadyAlerted.has(id));
+  // doubleCreditMonitor.ts's own periodic check — deliberately a SEPARATE
+  // query from findDoubleCreditedDeposits above, not a shared one, since
+  // that one is explicitly a full-history one-time audit surface (also
+  // used by GET /admin/deposits/audit-double-credits) and must stay
+  // unbounded. This one only needs to catch something NEW: it excludes
+  // already-alerted deposits directly (one round trip instead of the
+  // fetch-then-filter two-step this replaced) and bounds the scan to
+  // recent activity, since a genuinely new double-credit is always
+  // recent — the two real historical cases (both 2026-08-19) are already
+  // permanently remembered in double_credit_alerts regardless of this
+  // window, so nothing currently relevant is excluded by it. Egress-
+  // reduction motivated (2026-09-19): this ran every 5 minutes forever
+  // as an unbounded full-history scan when only "is there anything NEW"
+  // was ever actually needed.
+  async findRecentUnalertedDoubleCredits(): Promise<
+    Array<{ depositId: string; creditCount: number; chain: string; txHash: string; userId: string; amount: string }>
+  > {
+    const { rows } = await pool.query(`
+      select d.id as deposit_id, t.credit_count, d.chain, d.tx_hash, d.user_id, d.amount
+      from deposits d
+      join (
+        select deposit_id, count(*) as credit_count
+        from deposit_state_transitions
+        where to_state = 'BALANCE_CREDITED' and created_at > now() - interval '90 days'
+        group by deposit_id
+        having count(*) > 1
+      ) t on t.deposit_id = d.id
+      where not exists (select 1 from double_credit_alerts a where a.deposit_id = d.id)
+      order by d.created_at desc
+    `);
+    return rows.map((r) => ({
+      depositId: r.deposit_id,
+      creditCount: Number(r.credit_count),
+      chain: r.chain,
+      txHash: r.tx_hash,
+      userId: r.user_id,
+      amount: r.amount,
+    }));
   },
 
   async markDoubleCreditsAlerted(depositIds: string[]): Promise<void> {

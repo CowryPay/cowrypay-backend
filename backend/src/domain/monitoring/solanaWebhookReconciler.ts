@@ -85,7 +85,12 @@ export async function reconcileSolanaWebhookAddresses(): Promise<void> {
   await sendTelegramOpsAlert(`<b>CowryPay Solana webhook reconciled</b>\n\n${lines.join("\n")}`);
 }
 
-const RECONCILE_INTERVAL_MS = 10 * 60_000;
+// Widened from 10 to 20 minutes (2026-09-19, Supabase egress reduction) —
+// this backfills addresses a webhook registration race might have missed
+// (see this file's own comment above); a real gap sits there until fixed
+// regardless, so 10 extra minutes of detection lag doesn't change the
+// outcome, but halves this job's database round trips over a day.
+const RECONCILE_INTERVAL_MS = 20 * 60_000;
 
 export function startSolanaWebhookReconciler(): void {
   setInterval(() => {

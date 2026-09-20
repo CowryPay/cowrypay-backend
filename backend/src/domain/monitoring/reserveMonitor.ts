@@ -61,7 +61,13 @@ export async function runReserveCheck(): Promise<void> {
   }
 }
 
-const CHECK_INTERVAL_MS = 10 * 60_000;
+// Widened from 10 to 20 minutes (2026-09-19, Supabase egress reduction) —
+// a genuine reserve shortfall builds up gradually over many sends, not
+// instantly, and this only alerts on a real change anyway (see
+// getAlertedShortfalls above): the 10 extra minutes of detection lag has
+// no real effect on outcomes, but halves this job's database round trips
+// over a day.
+const CHECK_INTERVAL_MS = 20 * 60_000;
 
 export function startReserveMonitor(): void {
   setInterval(() => {

@@ -25,13 +25,17 @@ import { sendTelegramOpsAlert } from "./telegram.js";
 // meant a genuine forever-repeating false alarm after every single
 // deploy, not a one-off.
 export async function runDoubleCreditCheck(): Promise<void> {
-  const affected = await adminRepo.findDoubleCreditedDeposits();
-  if (affected.length === 0) return;
+  // findRecentUnalertedDoubleCredits (not findDoubleCreditedDeposits,
+  // which stays a separate, deliberately unbounded full-history audit
+  // query used on demand by GET /admin/deposits/audit-double-credits) —
+  // excludes already-alerted deposits and bounds the scan to recent
+  // activity directly in SQL, since this check only ever needs to catch
+  // something NEW, not re-audit the platform's whole history every 5
+  // minutes forever.
+  const newRows = await adminRepo.findRecentUnalertedDoubleCredits();
+  if (newRows.length === 0) return;
 
-  const newlyFound = await adminRepo.filterUnalertedDoubleCredits(affected.map((d) => d.depositId));
-  if (newlyFound.length === 0) return;
-
-  const newRows = affected.filter((d) => newlyFound.includes(d.depositId));
+  const newlyFound = newRows.map((d) => d.depositId);
 
   // Marked BEFORE sending, not after — a Telegram failure must never
   // leave this un-marked and re-attempted forever on a genuinely
