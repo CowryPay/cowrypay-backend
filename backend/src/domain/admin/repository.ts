@@ -210,7 +210,13 @@ export const adminRepo = {
       recipientsTotal,
     ] = await Promise.all([
       pool.query(`select count(*)::int as count from users`),
-      pool.query(`select count(*)::int as count from users where kyc_status = 'VERIFIED'`),
+      // Real bug found live (2026-09-22): this checked 'VERIFIED' (upper),
+      // but the users.kyc_status column's own CHECK constraint (migration
+      // 0001) only ever allows lowercase ('unverified'/'pending'/
+      // 'verified'/'rejected') — 'VERIFIED' could never match a single
+      // row, so this count was silently 0 from the moment KYC shipped,
+      // not something specific to any particular user.
+      pool.query(`select count(*)::int as count from users where kyc_status = 'verified'`),
       pool.query(`select count(*)::int as count from wallets`),
       pool.query(`select chain, count(*)::int as count from wallets group by chain order by chain`),
       pool.query(`select provider, count(*)::int as count from wallets group by provider order by provider`),
