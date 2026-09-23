@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { z } from "zod";
 import { env } from "../config/env.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireAdminKey } from "../middleware/requireAdminKey.js";
@@ -7,9 +8,16 @@ import { getKycAdapter } from "../domain/kyc/index.js";
 
 export const kycRouter = Router();
 
+const StartKycSchema = z.object({ country: z.string().min(1) });
+
 kycRouter.post("/kyc/start", requireAuth, async (req: Request, res: Response) => {
+  const parsed = StartKycSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "country is required" });
+    return;
+  }
   try {
-    const session = await startKyc(req.authUser!.id);
+    const session = await startKyc(req.authUser!.id, parsed.data.country);
     res.json(session);
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });

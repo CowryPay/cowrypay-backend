@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 
 // env.ts throws at import without DATABASE_URL/SUPABASE_URL — the adapter
 // only needs the Dojah secret, so mock just that.
-vi.mock("../../src/config/env.js", () => ({ env: { dojahSecretKey: "test_secret", dojahWebhookSecret: "test_secret" } }));
+const envMock = vi.hoisted(() => ({
+  dojahSecretKey: "test_secret",
+  dojahWebhookSecret: "test_secret",
+  dojahWidgetId: "widget_ng_ke",
+  dojahWidgetIdGlobal: "widget_global",
+}));
+vi.mock("../../src/config/env.js", () => ({ env: envMock }));
 
 const { dojahKycAdapter } = await import("../../src/domain/kyc/dojahAdapter.js");
 
@@ -31,9 +37,27 @@ function payload(overrides: Record<string, unknown> = {}) {
 
 describe("dojahKycAdapter.startVerification", () => {
   it("returns a reference of at least 10 chars and no redirectUrl", async () => {
-    const session = await dojahKycAdapter.startVerification({ userId: "u1", email: null });
+    const session = await dojahKycAdapter.startVerification({ userId: "u1", email: null, country: "Nigeria" });
     expect(session.providerReference).toMatch(/^dojah_[0-9a-f-]{36}$/);
     expect(session.redirectUrl).toBeUndefined();
+  });
+
+  it.each(["Nigeria", "Kenya"])("routes %s to the Government-Data-capable widget", async (country) => {
+    const session = await dojahKycAdapter.startVerification({ userId: "u1", email: null, country });
+    expect(session.widgetId).toBe("widget_ng_ke");
+  });
+
+  it.each(["Ghana", "Uganda", "Tanzania"])("routes %s to the global (Government-ID-only) widget", async (country) => {
+    const session = await dojahKycAdapter.startVerification({ userId: "u1", email: null, country });
+    expect(session.widgetId).toBe("widget_global");
+  });
+
+  it("throws a clear error when the required widget isn't configured", async () => {
+    envMock.dojahWidgetIdGlobal = undefined as unknown as string;
+    await expect(dojahKycAdapter.startVerification({ userId: "u1", email: null, country: "Ghana" })).rejects.toThrow(
+      /DOJAH_WIDGET_ID_GLOBAL/,
+    );
+    envMock.dojahWidgetIdGlobal = "widget_global";
   });
 });
 

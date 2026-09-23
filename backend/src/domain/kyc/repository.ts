@@ -9,6 +9,11 @@ export interface KycVerificationAttempt {
   provider: string;
   providerReference: string | null;
   status: KycAttemptStatus;
+  // Which country this attempt was verified against — audit trail for
+  // which Dojah workflow it routed to (dojahAdapter.ts's
+  // GOVERNMENT_DATA_COUNTRIES split). Null for rows predating this and
+  // for providers that don't route by country (mock).
+  country: string | null;
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -21,6 +26,7 @@ function mapAttempt(row: any): KycVerificationAttempt {
     provider: row.provider,
     providerReference: row.provider_reference,
     status: row.status,
+    country: row.country,
     resolvedAt: row.resolved_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -30,13 +36,13 @@ function mapAttempt(row: any): KycVerificationAttempt {
 export const kycAttemptsRepo = {
   async create(
     client: PoolClient,
-    input: { userId: string; provider: string; providerReference: string | null },
+    input: { userId: string; provider: string; providerReference: string | null; country?: string | null },
   ): Promise<KycVerificationAttempt> {
     const { rows } = await client.query(
-      `insert into kyc_verification_attempts (user_id, provider, provider_reference)
-       values ($1, $2, $3)
+      `insert into kyc_verification_attempts (user_id, provider, provider_reference, country)
+       values ($1, $2, $3, $4)
        returning *`,
-      [input.userId, input.provider, input.providerReference],
+      [input.userId, input.provider, input.providerReference, input.country ?? null],
     );
     return mapAttempt(rows[0]);
   },

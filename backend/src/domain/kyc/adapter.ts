@@ -18,6 +18,11 @@ export interface KycSession {
   // Where the client sends the user to complete ID + liveness verification.
   // Undefined for the mock adapter — there's nothing to redirect to.
   redirectUrl?: string;
+  // Which Dojah widget to launch — no longer a single static frontend
+  // value once a second EasyOnboard workflow exists for countries where
+  // Government Data isn't available (see dojahAdapter.ts). Undefined for
+  // the mock adapter, which has no widget at all.
+  widgetId?: string;
 }
 
 // Framework-agnostic slice of an incoming webhook request — just what a
@@ -46,7 +51,12 @@ export interface WebhookRequest {
 // each real vendor's own header name and algorithm live inside its own
 // adapter, not hardcoded into the shared route.
 export interface KycAdapter {
-  startVerification(input: { userId: string; email: string | null }): Promise<KycSession>;
+  // country is which country the user is verifying from — required
+  // routing input, not optional metadata: Dojah's own Government Data
+  // step only supports Nigeria/Kenya (confirmed live 2026-09-22/23), so a
+  // real vendor needs this to pick the right workflow/widget. The mock
+  // adapter ignores it.
+  startVerification(input: { userId: string; email: string | null; country: string }): Promise<KycSession>;
   verifyWebhookSignature(req: WebhookRequest): boolean;
   // Turns a vendor's own webhook body into the normalized pair
   // resolveKyc() actually needs. Adapter-owned for the same reason

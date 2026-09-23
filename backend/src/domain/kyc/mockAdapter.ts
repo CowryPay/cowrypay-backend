@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { KycAdapter, KycSession } from "./adapter.js";
 
 export const mockKycAdapter: KycAdapter = {
+  // country ignored — mock mode has no real widget/workflow to route to.
   async startVerification({ userId }): Promise<KycSession> {
     return {
       providerReference: `mock_kyc_${userId}_${randomUUID()}`,

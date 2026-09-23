@@ -46,6 +46,16 @@ function verifySignature(rawBody: Buffer | undefined, signature: string | undefi
   return expected.length === provided.length && timingSafeEqual(expected, provided);
 }
 
+// Dojah's own coverage split, confirmed live (2026-09-22/23) — NOT the
+// same as SUPPORTED_COUNTRIES in ai-agent/offramp/countries.ts (which
+// countries CowryPay operates in generally). This is specifically which
+// countries have the Government Data step (live BVN/NIN/National ID
+// registry lookup) available at all — Dojah's own team confirmed no
+// other country has this, and a workflow's steps can't be made
+// conditional, so every other country needs a genuinely separate
+// workflow (dojahWidgetIdGlobal), not a config toggle on this one.
+const GOVERNMENT_DATA_COUNTRIES = new Set(["Nigeria", "Kenya"]);
+
 // Dojah's documented verification_status values. Ongoing/Pending are
 // legitimate non-terminal events (still in the flow / awaiting review) —
 // resolving the attempt on one of those would reject a user who hasn't
@@ -121,12 +131,20 @@ export const dojahKycAdapter: KycAdapter = {
   // No redirectUrl — the widget is embedded, not a redirect. The frontend
   // passes providerReference into the widget as reference_id (Dojah
   // requires min 10 chars), and Dojah echoes it back on the webhook.
-  async startVerification(): Promise<KycSession> {
+  async startVerification({ country }): Promise<KycSession> {
     // Checked here too, not just on the webhook, so a misconfigured
     // environment fails before a user sits through a flow whose result
     // could never be verified.
     requireSecretKey();
-    return { providerReference: `dojah_${randomUUID()}` };
+    const widgetId = GOVERNMENT_DATA_COUNTRIES.has(country) ? env.dojahWidgetId : env.dojahWidgetIdGlobal;
+    if (!widgetId) {
+      throw new Error(
+        GOVERNMENT_DATA_COUNTRIES.has(country)
+          ? "DOJAH_WIDGET_ID must be set for KYC_PROVIDER=dojah"
+          : `No Dojah workflow configured for ${country} — DOJAH_WIDGET_ID_GLOBAL must be set`,
+      );
+    }
+    return { providerReference: `dojah_${randomUUID()}`, widgetId };
   },
 
   verifyWebhookSignature(req: WebhookRequest): boolean {

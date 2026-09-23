@@ -1,6 +1,7 @@
 import { withTransaction } from "../../db/pool.js";
 import { env } from "../../config/env.js";
 import { usersRepo } from "../users/repository.js";
+import { resolveCountry } from "../../ai-agent/offramp/countries.js";
 import { getKycAdapter } from "./index.js";
 import { kycAttemptsRepo } from "./repository.js";
 import type { KycSession, KycSubject } from "./adapter.js";
@@ -9,21 +10,34 @@ import { kycStatusForScreening, runAmlScreening } from "../aml/service.js";
 
 // KYC gates sends, not signup/wallet/deposits (§7.3) — this is only ever
 // called on user action, never automatically at signup.
-export async function startKyc(userId: string): Promise<KycSession> {
+//
+// country decides which Dojah workflow gets used (dojahAdapter.ts) — the
+// Government Data step only exists for Nigeria/Kenya, confirmed live with
+// Dojah (2026-09-22/23), so every other country needs a different
+// workflow entirely. Validated with the same resolveCountry() remittance
+// already uses for its own country input, rather than trusting a raw
+// string straight through — a garbage value should fail clean here, not
+// silently route to whichever widget the adapter happens to fall back to.
+export async function startKyc(userId: string, countryInput: string): Promise<KycSession> {
   const user = await usersRepo.findById(userId);
   if (!user) throw new Error("User not found");
   if (user.kycStatus === "verified") {
     throw new Error("KYC is already verified for this user");
   }
+  const country = resolveCountry(countryInput);
+  if (!country) {
+    throw new Error(`"${countryInput}" isn't a country we support — please check the spelling and try again.`);
+  }
 
   const adapter = getKycAdapter();
-  const session = await adapter.startVerification({ userId, email: user.email });
+  const session = await adapter.startVerification({ userId, email: user.email, country: country.name });
 
   await withTransaction(async (client) => {
     await kycAttemptsRepo.create(client, {
       userId,
       provider: env.kycProvider,
       providerReference: session.providerReference,
+      country: country.name,
     });
     await usersRepo.updateKycStatus(client, userId, "pending", null);
   });

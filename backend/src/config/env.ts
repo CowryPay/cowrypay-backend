@@ -51,7 +51,19 @@ export const env = {
   // set this yet doesn't regress further — but the real, correct value is
   // the webhook subscription's own secret, not the API one.
   dojahWebhookSecret: process.env.DOJAH_WEBHOOK_SECRET ?? process.env.DOJAH_SECRET_KEY,
+  // The Nigeria/Kenya EasyOnboard workflow specifically — includes the
+  // Government Data step (BVN/NIN/National ID live registry lookup).
+  // Confirmed live with Dojah (2026-09-22/23): that step only exists for
+  // those two countries, and steps within one workflow can't be made
+  // conditional/optional, so every other country needs a genuinely
+  // separate workflow (dojahWidgetIdGlobal below) — not a config toggle
+  // on this same one.
   dojahWidgetId: process.env.DOJAH_WIDGET_ID,
+  // The Government-Issued-ID-only workflow (no Government Data step) —
+  // used for every country besides Nigeria/Kenya, since that document-OCR
+  // check works globally regardless of country. See
+  // dojahAdapter.ts's GOVERNMENT_DATA_COUNTRIES for the actual routing.
+  dojahWidgetIdGlobal: process.env.DOJAH_WIDGET_ID_GLOBAL,
   dojahBaseUrl: process.env.DOJAH_BASE_URL ?? "https://api.dojah.io",
   // AML/watchlist screening at KYC completion (KYC issue #6). Opt-in, not
   // on by default: every screen is a billed Dojah call, and turning it on
