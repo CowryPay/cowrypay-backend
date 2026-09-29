@@ -1,5 +1,5 @@
 import type { Chain } from "viem";
-import { celo, base, optimism, mainnet } from "viem/chains";
+import { celo, base, optimism, mainnet, arc } from "viem/chains";
 import { parseEther, parseUnits } from "viem";
 import { env } from "../../config/env.js";
 
@@ -24,6 +24,18 @@ export interface ChainConfig {
   // not a second static guess here (see that file's own comment on the
   // real incident a fixed gasTopUpAmount caused).
   gasBufferThreshold: bigint;
+  // Set only where one of `tokens` IS this chain's native gas token — one
+  // shared balance exposed two ways, not two separate balances (Arc: USDC).
+  // depositScanner.ts and depositSweeper.ts both branch on this; see Arc's
+  // entry below for exactly why neither can treat such a token like a
+  // plain ERC-20.
+  nativeToken?: {
+    symbol: string;
+    // Emits a standard Transfer(from, to, value) log — in native 18-decimal
+    // units — for EVERY movement of the native token, whether sent natively
+    // or via the ERC-20 interface.
+    transferLogAddress: `0x${string}`;
+  };
 }
 
 // Contract addresses verified on-chain (symbol()/decimals()) before being
@@ -115,6 +127,44 @@ const CHAIN_REGISTRY: Record<string, ChainConfig> = {
       USDC: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
     },
     gasBufferThreshold: parseEther("0.002"),
+  },
+  // Circle's Arc L1 (chain id 5042, mainnet since 2026-09-16), EVM-
+  // compatible, so the same KMS-derived address works here unchanged.
+  // Verified live (2026-09-24) via eth_call against the contract itself:
+  // symbol() "USDC", decimals() 6.
+  //
+  // Unlike every chain above, USDC is ALSO Arc's native gas token (18
+  // decimals natively), and the two are ONE balance: confirmed live that
+  // balanceOf() here always equals getBalance() / 1e12 for the same
+  // address. Two consequences, both confirmed against real mainnet
+  // receipts, not docs:
+  //  - A plain native send emits a Transfer log ONLY from
+  //    0xff...fe (the system emitter below), never from the ERC-20
+  //    contract — watching the contract alone (as every other chain's
+  //    scanning does) would silently miss a user who sends USDC the
+  //    ordinary way from their wallet, while the sweeper's balanceOf still
+  //    sees it and sweeps it away, uncredited. An ERC-20 transfer() emits
+  //    one log from EACH, so depositScanner.ts watches the emitter instead
+  //    of the contract — every movement exactly once either way.
+  //  - Gas for a deposit wallet's own sweep is paid out of the very USDC
+  //    being swept, so no gas top-up from the payout wallet is ever
+  //    needed (or wanted — a top-up would itself be a native USDC send
+  //    into the user's address, and credited as a deposit by the emitter
+  //    watch above). depositSweeper.ts sweeps natively, minus a gas reserve.
+  arc: {
+    viemChain: arc,
+    rpcUrl: env.arcRpcUrl,
+    tokens: {
+      USDC: { address: "0x3600000000000000000000000000000000000000", decimals: 6 },
+    },
+    nativeToken: { symbol: "USDC", transferLogAddress: "0xfffffffffffffffffffffffffffffffffffffffe" },
+    // In native USDC (18 decimals) — no top-ups ever come out of the payout
+    // wallet here, so this only needs to cover its own withdrawal/fee-sweep
+    // gas: a real ERC-20 transfer eth_estimateGas'd at 49,314 gas, ~0.0012
+    // USDC at the real 24.1 gwei maxFeePerGas observed — ~80 transfers'
+    // worth. The payout's USDC liquidity and gas are the same balance here,
+    // so falling below this means it's genuinely out of both.
+    gasBufferThreshold: parseEther("0.1"),
   },
 };
 

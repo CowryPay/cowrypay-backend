@@ -316,7 +316,14 @@ export async function sendNativeToken(chain: string, toAddress: `0x${string}`, a
   if (!env.awsKmsPayoutKeyArn) {
     throw new Error("AWS_KMS_PAYOUT_KEY_ARN must be set when WALLET_PROVIDER=aws-kms");
   }
-  const { viemChain, rpcUrl } = getChainConfig(chain);
+  const { viemChain, rpcUrl, nativeToken } = getChainConfig(chain);
+  // Arc's native token IS its USDC (see chains.ts) — a "gas top-up" there
+  // is a real USDC transfer that depositScanner.ts credits as a deposit if
+  // it lands on a user's address, and no wallet there ever needs one (gas
+  // is paid from the USDC it already holds). Move USDC via withdraw().
+  if (nativeToken) {
+    throw new Error(`${chain}'s native token is ${nativeToken.symbol} itself — not a gas-only token; use a normal ${nativeToken.symbol} withdrawal instead`);
+  }
 
   const client = kmsClient();
   const payoutAddress = await fetchAddressForKey(client, env.awsKmsPayoutKeyArn);

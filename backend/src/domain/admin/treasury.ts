@@ -245,7 +245,9 @@ const LEDGER_TOKENS = ["USDC", "USDT", "USDT0"];
 
 export async function getTreasurySnapshot(): Promise<TreasurySnapshot> {
   const evmChains = SUPPORTED_CHAINS.filter((c) => c !== "mock-chain");
-  const nativeSymbolFor = (chain: string) => (chain === "celo" ? "CELO" : "ETH");
+  // Arc's native token IS its USDC (same balance — see chains.ts), so its
+  // "native" figure here is that same USDC again, not an extra holding.
+  const nativeSymbolFor = (chain: string) => (chain === "celo" ? "CELO" : chain === "arc" ? "USDC" : "ETH");
 
   const feeTreasury = await Promise.all([
     ...evmChains.map((chain) =>

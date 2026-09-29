@@ -20,15 +20,21 @@ const MAX_BLOCK_RANGE = 2000n;
 const CONFIRMATION_BUFFER = 2n;
 
 async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
-  const { viemChain, rpcUrl, tokens } = getChainConfig(chain);
+  const { viemChain, rpcUrl, tokens, nativeToken } = getChainConfig(chain);
   // Watches every token contract configured for this chain (USDC, and USDT
   // where supported) in one getLogs call — which contract a given log came
   // from determines the tokenSymbol/decimals used below, rather than that
-  // being assumed regardless of which token actually moved.
-  const tokenAddresses = Object.values(tokens).map((t) => t.address);
-  const tokenByAddress = new Map(
-    Object.entries(tokens).map(([symbol, cfg]) => [cfg.address.toLowerCase(), { symbol, decimals: cfg.decimals }]),
+  // being assumed regardless of which token actually moved. A token that's
+  // also the native gas token (Arc's USDC) is watched via its native
+  // transfer emitter INSTEAD of its ERC-20 contract — see chains.ts's Arc
+  // entry for why the contract alone misses plain native sends.
+  const watched = Object.entries(tokens).map(([symbol, cfg]) =>
+    nativeToken?.symbol === symbol
+      ? { address: nativeToken.transferLogAddress, symbol, decimals: cfg.decimals, logDecimals: viemChain.nativeCurrency.decimals }
+      : { address: cfg.address, symbol, decimals: cfg.decimals, logDecimals: cfg.decimals },
   );
+  const tokenAddresses = watched.map((t) => t.address);
+  const tokenByAddress = new Map(watched.map((t) => [t.address.toLowerCase(), t]));
   const byAddress = new Map(wallets.map((w) => [w.address.toLowerCase(), w]));
   const client = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
 
@@ -83,11 +89,17 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
       if (!wallet) continue; // shouldn't happen — filtered by the watchlist above
       const token = tokenByAddress.get(log.address.toLowerCase());
       if (!token) continue; // shouldn't happen — filtered by the address list passed to getLogs above
+      // Truncates a native-unit (18-decimal) value down to the token's own
+      // precision, so the ledger never holds sub-micro-USDC dust that no
+      // 6-decimal withdrawal/off-ramp could ever actually send. A no-op
+      // (divide by 1) for every ordinary ERC-20.
+      const value = log.args.value! / 10n ** BigInt(token.logDecimals - token.decimals);
+      if (value === 0n && token.logDecimals !== token.decimals) continue; // sub-micro native dust, nothing to credit
       await ingestDeposit({
         userId: wallet.userId,
         walletId: wallet.id,
         tokenSymbol: token.symbol,
-        amount: formatUnits(log.args.value!, token.decimals),
+        amount: formatUnits(value, token.decimals),
         chain,
         txHash: log.transactionHash!,
       });
