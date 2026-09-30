@@ -31,6 +31,10 @@ const NETWORK_NAMES: Record<string, string> = {
   solana: "SOLANA",
   base: "BASE",
   ethereum: "ETHEREUM",
+  // UNVERIFIED (2026-09-28) — assumed from Centiiv's naming pattern, not
+  // yet confirmed against /public/quote (it 401s without a key). Must get
+  // a real quote back for network "ARC" before this ships.
+  arc: "ARC",
 };
 
 export function centiivNetworkFor(chain: string): string | null {

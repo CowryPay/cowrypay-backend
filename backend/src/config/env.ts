@@ -223,6 +223,11 @@ export const env = {
   // real environment, since Ethereum mainnet's public endpoints are
   // rate-limited far too aggressively for real use.
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL ?? "https://eth.llamarpc.com",
+  // Circle's own public Arc mainnet endpoint — confirmed live (2026-09-24)
+  // returning eth_chainId 0x13b2 (5042). viem's own `arc` chain definition
+  // ships with an empty rpcUrls list, so unlike the chains above there's
+  // no viem default to fall back on either — this fallback is the only one.
+  arcRpcUrl: process.env.ARC_RPC_URL ?? "https://rpc.mainnet.arc.io",
   // Stellar support (USDC only, shared omnibus deposit address + per-user
   // memo — a different custody model from every EVM chain above). All only
   // required once Stellar code paths are actually exercised — checked

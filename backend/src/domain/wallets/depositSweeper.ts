@@ -101,6 +101,45 @@ export async function readTokenBalance(chain: string, tokenSymbol: string, addre
   return publicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: "balanceOf", args: [address] });
 }
 
+// A plain native value transfer to an EOA (the payout key) — confirmed
+// live on Arc via eth_estimateGas (exactly 21,000), and fixed by the EVM
+// itself for any EOA recipient, so pinned rather than re-estimated.
+const NATIVE_TRANSFER_GAS = 21_000n;
+
+// For a token that IS the chain's native gas token (Arc's USDC — see
+// chains.ts's own entry): no payout top-up, since the wallet already holds
+// its own gas in the very balance being swept, and a top-up would itself
+// land as a native send into the user's address that depositScanner.ts
+// credits as a deposit. Instead sends everything natively except a gas
+// reserve, with maxFeePerGas pinned to the same live estimate that sized
+// the reserve so the fee can never exceed it. The unused part of the
+// reserve (~2/3 of it) just stays behind — smaller than the reserve the
+// next cycle computes, so this never re-sweeps its own leftovers.
+async function sweepNativeGasToken(chain: string, wallet: SweepableWallet, payout: SweepablePayout): Promise<boolean> {
+  const { viemChain, rpcUrl, tokens, nativeToken } = getChainConfig(chain);
+  const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
+  const address = wallet.address as `0x${string}`;
+  const tokenDecimals = tokens[nativeToken!.symbol]!.decimals;
+  const minSweep = MIN_SWEEP_TOKEN_AMOUNT * 10n ** BigInt(viemChain.nativeCurrency.decimals - tokenDecimals);
+
+  const [balance, fees] = await Promise.all([publicClient.getBalance({ address }), publicClient.estimateFeesPerGas()]);
+  const maxFeePerGas = fees.maxFeePerGas ?? (await publicClient.getGasPrice());
+  const reserve = NATIVE_TRANSFER_GAS * maxFeePerGas * GAS_TOPUP_SAFETY_MULTIPLIER;
+  const value = balance - reserve;
+  if (value < minSweep) return false;
+
+  const account = kmsAccountFromKey(wallet.externalWalletId, address);
+  const walletClient = createWalletClient({ account, chain: viemChain, transport: http(rpcUrl) });
+  await walletClient.sendTransaction({
+    to: payout.address,
+    value,
+    gas: NATIVE_TRANSFER_GAS,
+    maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+  });
+  return true;
+}
+
 // Kept separate from the listByProvider/DB orchestration below so it can be
 // exercised directly against a real wallet without needing a live DB row —
 // mirrors how receiptStatus.ts's getReceiptStatus was kept independent in
@@ -112,7 +151,8 @@ export async function sweepWallet(
   wallet: SweepableWallet,
   payout: SweepablePayout,
 ): Promise<boolean> {
-  const { viemChain, rpcUrl } = getChainConfig(chain);
+  const { viemChain, rpcUrl, nativeToken } = getChainConfig(chain);
+  if (nativeToken?.symbol === tokenSymbol.toUpperCase()) return sweepNativeGasToken(chain, wallet, payout);
   const { address: tokenAddress } = getTokenConfig(chain, tokenSymbol);
   const publicClient = createPublicClient({ chain: viemChain, transport: http(rpcUrl) });
   const address = wallet.address as `0x${string}`;

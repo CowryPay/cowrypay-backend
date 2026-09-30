@@ -75,7 +75,11 @@ export function classifyIntent(message: string): ChatIntent {
 // deposit option, and an existing balance on either (if any) must stay
 // off-rampable via the dynamic fundedChains check in remittanceDraft.ts,
 // which never depended on this list to begin with.
-export const DEPOSIT_CHAINS = ["celo", "base", "stellar", "solana"] as const;
+//
+// Arc added (2026-09-24) — shares the same EVM deposit address, but its
+// USDC is also its native gas token, so it needs the chain-specific
+// scanning/sweeping described in wallets/chains.ts's Arc entry.
+export const DEPOSIT_CHAINS = ["celo", "base", "arc", "stellar", "solana"] as const;
 
 // "address" is included as its own trigger, not just "deposit"/"top up"/
 // etc — found live that "what's my solana address" has no "deposit" in it

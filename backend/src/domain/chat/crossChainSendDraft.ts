@@ -28,6 +28,11 @@ import type { ParsedIntent } from "./schemas.js";
 // Celo routes through liFiAdapter regardless, which has no Stellar
 // support). See explainUnsupportedBridgePairMessage below for the exact
 // per-pair messaging.
+// Arc deliberately not here yet: @circle-fin/bridge-kit ships an Arc
+// ChainDefinition, but nothing in crossChainSend/bridge (chainDefinitions,
+// cctpBridge's EVM_CHAINS_HERE, cctpAdapter's SUPPORTED_CHAINS) or
+// crossChainSend/service.ts's source-chain sweep checks wires it up —
+// listing it here would offer a route that fails at execution time.
 export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana", "stellar"];
 
 function capitalize(s: string): string {
