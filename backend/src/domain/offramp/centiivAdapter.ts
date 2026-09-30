@@ -31,9 +31,9 @@ const NETWORK_NAMES: Record<string, string> = {
   solana: "SOLANA",
   base: "BASE",
   ethereum: "ETHEREUM",
-  // UNVERIFIED (2026-09-28) — assumed from Centiiv's naming pattern, not
-  // yet confirmed against /public/quote (it 401s without a key). Must get
-  // a real quote back for network "ARC" before this ships.
+  // Confirmed live (2026-09-30) via scripts/verify-centiiv-arc-network.ts:
+  // network "ARC" returned a real quote (10 USDC -> NGN, rate 1365.5,
+  // fees 0). No longer just assumed from Centiiv's naming pattern.
   arc: "ARC",
 };
 

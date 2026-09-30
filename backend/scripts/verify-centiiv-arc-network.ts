@@ -11,6 +11,12 @@
 // needs CENTIIV_PUBLIC_KEY, not every other service's config env.ts pulls
 // in. Run via Railway's Console: `npx tsx scripts/verify-centiiv-arc-network.ts`
 import "dotenv/config";
+import { setDefaultResultOrder } from "node:dns";
+
+// Same fix as check-kyc-status.ts / migrate.ts: this sandbox's Node
+// resolves api.centiiv.io's AAAA record first and that path times out,
+// even though curl/getent resolve and connect fine (IPv4).
+setDefaultResultOrder("ipv4first");
 
 async function tryQuote(network: string) {
   const baseUrl = process.env.CENTIIV_BASE_URL ?? "https://api.centiiv.io";
