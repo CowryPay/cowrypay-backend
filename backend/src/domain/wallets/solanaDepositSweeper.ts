@@ -140,7 +140,15 @@ export async function sweepSolanaDeposits(): Promise<void> {
   }
 }
 
-const SWEEP_INTERVAL_MS = 5 * 60_000;
+// Widened from 5 to 30 minutes (2026-10-05, Alchemy cost reduction) — this
+// unconditional loop (every wallet x every mint, a getTokenAccountBalance
+// each) was part of the same cost problem as depositSweeper.ts's EVM
+// sweeper (see its own comment): stateMachine.ts's triggerSweepAfterCredit
+// already sweeps a Solana wallet synchronously the moment its deposit is
+// credited (it calls this file's own sweepWallet directly), so this loop's
+// real job is just catching whatever that missed — a safety net, not the
+// primary mechanism. Logic otherwise unchanged.
+const SWEEP_INTERVAL_MS = 30 * 60_000;
 
 // Gated on the same SOLANA_DEPOSITS_ENABLED flag the webhook route uses —
 // no real scenario needs detection and sweeping toggled independently.
