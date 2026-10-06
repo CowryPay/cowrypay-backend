@@ -48,6 +48,23 @@ export const usersRepo = {
     return mapUser(rows[0]);
   },
 
+  // CAS'd, unlike updateKycStatus above: an abandon (user cancelled, or
+  // the TTL poller caught a stale attempt) must only revert a user who's
+  // still actually "pending" from THAT attempt. Without the guard, a
+  // zombie attempt the poller gets to late — after a different, newer
+  // attempt for the same user already resolved to "verified" — would
+  // silently downgrade an already-verified user back to "unverified" with
+  // no webhook, no user action, no error. See kyc/service.ts's
+  // abandonKycAttempt, the only caller.
+  async revertKycStatusIfPending(client: PoolClient, userId: string): Promise<User | null> {
+    const { rows } = await client.query(
+      `update users set kyc_status = 'unverified', kyc_reference = null
+       where id = $1 and kyc_status = 'pending' returning *`,
+      [userId],
+    );
+    return rows[0] ? mapUser(rows[0]) : null;
+  },
+
   async setPinHash(client: PoolClient, userId: string, pinHash: string): Promise<User> {
     const { rows } = await client.query(`update users set pin_hash = $2 where id = $1 returning *`, [
       userId,

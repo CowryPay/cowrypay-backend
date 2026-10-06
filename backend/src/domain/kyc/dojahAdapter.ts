@@ -59,8 +59,17 @@ const GOVERNMENT_DATA_COUNTRIES = new Set(["Nigeria", "Kenya"]);
 // Dojah's documented verification_status values. Ongoing/Pending are
 // legitimate non-terminal events (still in the flow / awaiting review) —
 // resolving the attempt on one of those would reject a user who hasn't
-// actually finished. Failed/Abandoned are terminal but never a pass.
-const REJECTED_STATUSES = new Set(["Failed", "Abandoned"]);
+// actually finished. Failed and Abandoned are both terminal and never a
+// pass, but are NOT the same thing: Failed is a real negative verdict
+// (Dojah actively reviewed and said no); Abandoned means the user just
+// never finished the flow, no verdict was ever reached. Kept as separate
+// decisions (see KycResult.decision) so resolveKyc can revert an
+// abandoned user to "unverified" (freely retryable) instead of
+// "rejected" — a contributor's report (2026-10-06) found both being
+// lumped together was breaking the retry copy shown to users who'd
+// simply backed out of the widget.
+const REJECTED_STATUSES = new Set(["Failed"]);
+const ABANDONED_STATUSES = new Set(["Abandoned"]);
 
 // Loose on `data`'s keys on purpose: which steps appear (id, selfie,
 // government_data, address, phone_number, ...) depends on how the
@@ -163,6 +172,9 @@ export const dojahKycAdapter: KycAdapter = {
     }
     if (REJECTED_STATUSES.has(verification_status)) {
       return { providerReference: reference_id, decision: "rejected" };
+    }
+    if (ABANDONED_STATUSES.has(verification_status)) {
+      return { providerReference: reference_id, decision: "abandoned" };
     }
     return null;
   },

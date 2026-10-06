@@ -9,7 +9,10 @@ export interface KycSubject {
 
 export interface KycResult {
   providerReference: string;
-  decision: "verified" | "rejected";
+  // "abandoned" is distinct from "rejected": the user never finished (no
+  // verdict was ever reached, freely retryable), vs. the vendor actively
+  // reviewed and said no. See dojahAdapter.ts's ABANDONED_STATUSES.
+  decision: "verified" | "rejected" | "abandoned";
   subject?: KycSubject;
 }
 

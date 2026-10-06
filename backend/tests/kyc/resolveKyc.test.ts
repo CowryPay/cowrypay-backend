@@ -71,3 +71,19 @@ describe("resolveKyc with AML screening disabled", () => {
     expect(usersRepo.updateKycStatus).toHaveBeenCalledWith({}, "u1", "verified", "dojah_ref");
   });
 });
+
+describe("resolveKyc with decision=abandoned", () => {
+  it("never screens, reverts the user to unverified, and clears the reference", async () => {
+    kycAttemptsRepo.resolve.mockResolvedValue({ ...attempt, status: "abandoned" });
+
+    await resolveKyc("dojah_ref", "abandoned");
+
+    expect(runAmlScreening).not.toHaveBeenCalled();
+    expect(amlScreeningsRepo.create).not.toHaveBeenCalled();
+    expect(kycAttemptsRepo.resolve).toHaveBeenCalledWith({}, "a1", "abandoned");
+    // "abandoned" is never a valid users.kyc_status — this is the one
+    // assertion that actually proves the revert-to-unverified-with-no-
+    // reference behavior, not just that resolve() was called correctly.
+    expect(usersRepo.updateKycStatus).toHaveBeenCalledWith({}, "u1", "unverified", null);
+  });
+});

@@ -53,6 +53,7 @@ import { startDoubleCreditMonitor } from "./domain/monitoring/doubleCreditMonito
 import { startSolanaWebhookReconciler } from "./domain/monitoring/solanaWebhookReconciler.js";
 import { startReserveMonitor } from "./domain/monitoring/reserveMonitor.js";
 import { startCrossChainSendConfirmationPoller } from "./domain/crossChainSend/crossChainSendConfirmationPoller.js";
+import { startKycPendingTtlPoller } from "./domain/kyc/kycPendingTtlPoller.js";
 
 // Defense-in-depth beyond the express-async-errors + error-middleware fix
 // above, which only covers the request/response cycle — this catches
@@ -137,3 +138,4 @@ startDoubleCreditMonitor();
 startSolanaWebhookReconciler();
 startReserveMonitor();
 startCrossChainSendConfirmationPoller();
+startKycPendingTtlPoller();

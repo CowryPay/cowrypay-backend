@@ -3,7 +3,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { requireAdminKey } from "../middleware/requireAdminKey.js";
-import { resolveKyc, startKyc } from "../domain/kyc/service.js";
+import { abandonKycAttempt, resolveKyc, startKyc } from "../domain/kyc/service.js";
+import { kycAttemptsRepo } from "../domain/kyc/repository.js";
 import { getKycAdapter } from "../domain/kyc/index.js";
 
 export const kycRouter = Router();
@@ -22,6 +23,38 @@ kycRouter.post("/kyc/start", requireAuth, async (req: Request, res: Response) =>
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+const CancelKycSchema = z.object({ providerReference: z.string().min(1) });
+
+// Lets the frontend tell us a user backed out of the widget before
+// finishing, instead of leaving them stuck "pending" forever with no way
+// to retry (see kyc/service.ts's abandonKycAttempt — a webhook that will
+// never fire is the only other thing that would ever resolve it).
+// Ownership checked directly here, 404 if not found or not theirs —
+// matches this codebase's existing house style for resource lookups (see
+// routes/deposits.ts, cryptoWithdrawals.ts, offramp.ts,
+// crossChainSends.ts), not the thrown-Error-turned-400 style the rest of
+// this file uses for business-rule failures on POST /kyc/start.
+//
+// Always 200 regardless of whether anything actually changed —
+// abandonKycAttempt is idempotent (a double-cancel, or one that lost the
+// race to a webhook that just landed, both no-op cleanly), and from the
+// caller's perspective "I tried to cancel, and I won't be double-billed"
+// is true either way.
+kycRouter.post("/kyc/cancel", requireAuth, async (req: Request, res: Response) => {
+  const parsed = CancelKycSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "providerReference is required" });
+    return;
+  }
+  const attempt = await kycAttemptsRepo.findByProviderReference(parsed.data.providerReference);
+  if (!attempt || attempt.userId !== req.authUser!.id) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  await abandonKycAttempt(attempt.id, attempt.userId);
+  res.json({ ok: true });
 });
 
 // The real KYC vendor's result callback. Which gate protects it depends on
