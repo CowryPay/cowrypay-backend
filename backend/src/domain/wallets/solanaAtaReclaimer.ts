@@ -23,7 +23,16 @@ import { sendTelegramOpsAlert } from "../monitoring/telegram.js";
 // is what actually distinguishes "created but never used" (reclaim) from
 // "used, temporarily empty because it was just swept" (leave alone) —
 // only a wallet with zero deposit history for USDT is a candidate at all.
-async function reclaimUsdtAta(wallet: { id: string; address: string; externalWalletId: string }): Promise<bigint | null> {
+interface AtaReclaimResult {
+  reclaimedLamports: bigint | null; // non-null only if we actually closed the account just now
+  // True once we're SURE there's nothing left to ever check again for this
+  // wallet (confirmed via a clean RPC response, never via a caught error —
+  // see markSolanaUsdtAtaSettled's own call sites below). Lets
+  // reclaimSolanaUsdtRent stop re-checking it on every future cycle.
+  settled: boolean;
+}
+
+async function reclaimUsdtAta(wallet: { id: string; address: string; externalWalletId: string }): Promise<AtaReclaimResult | null> {
   if (!env.solanaUsdtMint) return null;
   if (await depositsRepo.hasAnyDeposit(wallet.id, "USDT")) return null;
 
@@ -32,11 +41,30 @@ async function reclaimUsdtAta(wallet: { id: string; address: string; externalWal
   const mint = toAddress(env.solanaUsdtMint);
   const [ata] = await findAssociatedTokenPda({ owner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
 
-  const balanceResult = await rpc.getTokenAccountBalance(ata).send().catch(() => null);
-  if (!balanceResult) return null; // ATA doesn't exist — nothing to reclaim
-  if (BigInt(balanceResult.value.amount) !== 0n) return null; // real balance — never touch it (also enforced by the token program itself)
+  // getAccountInfo returns a clean { value: null } for a missing account
+  // rather than throwing (unlike getTokenAccountBalance) — that's what
+  // makes "doesn't exist" a signal safe enough to persist permanently,
+  // instead of conflating it with a transient RPC/network error the way a
+  // blanket try/catch would. jsonParsed also gives us the parsed token
+  // amount AND the account's lamports (the exact rent to reclaim) in this
+  // one call, where the old code needed a separate getBalance call for that.
+  const accountInfo = await rpc.getAccountInfo(ata, { encoding: "jsonParsed" }).send();
+  if (accountInfo.value === null) {
+    return { reclaimedLamports: null, settled: true }; // ATA genuinely never created — nothing to reclaim, ever
+  }
 
-  const rentLamports = (await rpc.getBalance(ata).send()).value; // exact reclaim amount, read before closing rather than assumed from a constant
+  const parsedData = accountInfo.value.data;
+  if (typeof parsedData === "string" || !("parsed" in parsedData)) {
+    throw new Error(`unexpected non-jsonParsed account data for Solana ATA ${ata}`);
+  }
+  const info = parsedData.parsed.info as { tokenAmount?: { amount?: string } } | undefined;
+  const tokenAmount = BigInt(info?.tokenAmount?.amount ?? "0");
+  // Real balance — never touch it (also enforced by the token program
+  // itself). Not settled: still swept on its own cadence, so this stays a
+  // genuine candidate on a future cycle once it's confirmed idle again.
+  if (tokenAmount !== 0n) return { reclaimedLamports: null, settled: false };
+
+  const rentLamports = BigInt(accountInfo.value.lamports);
 
   const treasury = await getSolanaTreasurySigner();
   const signer = await decryptSolanaSigner(wallet.externalWalletId);
@@ -47,12 +75,12 @@ async function reclaimUsdtAta(wallet: { id: string; address: string; externalWal
   });
 
   await signAndSendTransaction(signer, [closeIx]);
-  return rentLamports;
+  return { reclaimedLamports: rentLamports, settled: true };
 }
 
 export async function reclaimSolanaUsdtRent(): Promise<void> {
   if (!env.solanaUsdtMint) return;
-  const wallets = await walletsRepo.listByChain("solana");
+  const wallets = await walletsRepo.listUnsettledSolanaUsdtAtaWallets();
   if (wallets.length === 0) return;
 
   let closedCount = 0;
@@ -60,10 +88,13 @@ export async function reclaimSolanaUsdtRent(): Promise<void> {
 
   for (const wallet of wallets) {
     try {
-      const reclaimed = await reclaimUsdtAta(wallet);
-      if (reclaimed != null) {
+      const result = await reclaimUsdtAta(wallet);
+      if (result?.reclaimedLamports != null) {
         closedCount++;
-        reclaimedLamports += reclaimed;
+        reclaimedLamports += result.reclaimedLamports;
+      }
+      if (result?.settled) {
+        await walletsRepo.markSolanaUsdtAtaSettled(wallet.id);
       }
     } catch (err) {
       console.error(`[solana-ata-reclaimer] failed to check/close USDT ATA for wallet ${wallet.id}:`, err);
@@ -80,8 +111,9 @@ export async function reclaimSolanaUsdtRent(): Promise<void> {
 
 // Hourly, not on the sweeper's 5-minute cadence — this is idle-reserve
 // cleanup, not time-sensitive liquidity movement, and every cycle here
-// does a full listByChain("solana") pass plus one RPC round-trip per
-// wallet, so there's no benefit to running it more often.
+// does one RPC round-trip per not-yet-settled wallet (see migration 0027
+// and listUnsettledSolanaUsdtAtaWallets — settled wallets are excluded
+// from that list entirely), so there's no benefit to running it more often.
 const RECLAIM_INTERVAL_MS = 60 * 60_000;
 
 export function startSolanaAtaReclaimer(): void {

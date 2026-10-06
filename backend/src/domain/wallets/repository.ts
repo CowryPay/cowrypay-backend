@@ -75,4 +75,19 @@ export const walletsRepo = {
     const { rows } = await pool.query(`select * from wallets where chain = $1`, [chain]);
     return rows.map(mapWallet);
   },
+
+  // Scoped to solanaAtaReclaimer.ts's own use case only — excludes wallets
+  // already confirmed to have nothing left to reclaim (see migration 0027's
+  // own comment), so that job's hourly RPC checks don't grow forever with
+  // every wallet that's permanently idle or already settled.
+  async listUnsettledSolanaUsdtAtaWallets(): Promise<Wallet[]> {
+    const { rows } = await pool.query(
+      `select * from wallets where chain = 'solana' and solana_usdt_ata_settled = false`,
+    );
+    return rows.map(mapWallet);
+  },
+
+  async markSolanaUsdtAtaSettled(walletId: string): Promise<void> {
+    await pool.query(`update wallets set solana_usdt_ata_settled = true where id = $1`, [walletId]);
+  },
 };
