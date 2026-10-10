@@ -18,7 +18,12 @@ import { env } from "../../config/env.js";
 // currently return "no provider available" there — same liquidity/preview
 // gap as Celo's own quirk above, not a structural unsupported-network
 // error, so not added here.
-const UNSUPPORTED_NETWORKS = new Set(["optimism", "solana", "stellar"]);
+// Arc added (2026-10-10): Paycrest has no Arc rail — Centiiv handles Arc
+// offramps exclusively. Without this, Paycrest falsely appeared eligible
+// (Arc was never in UNSUPPORTED_NETWORKS), won the rate comparison by
+// default whenever Centiiv's quote failed, and produced a confusing
+// Paycrest-specific error instead of a clean "no provider" message.
+const UNSUPPORTED_NETWORKS = new Set(["optimism", "solana", "stellar", "arc"]);
 
 // Real gap found live (2026-08-31), same bug class already fixed for
 // Quidax/Centiiv (see their own SUPPORTED_FIAT_CURRENCIES comments) but
