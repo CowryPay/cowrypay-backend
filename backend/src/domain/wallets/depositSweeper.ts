@@ -269,10 +269,24 @@ export async function sweepDeposits(): Promise<void> {
   }
 }
 
-const SWEEP_INTERVAL_MS = 5 * 60_000;
+// Widened from 5 to 30 minutes (2026-10-05, Alchemy cost reduction) — this
+// unconditional loop (every wallet x every chain x every token, an eth_call
+// balanceOf each) was confirmed via Alchemy's own usage dashboard to be the
+// single largest driver of RPC cost, by a wide margin over every other
+// method combined. stateMachine.ts's triggerSweepAfterCredit already
+// sweeps the exact wallet/chain/token a deposit just credited on,
+// synchronously with that credit — that's the real-time mechanism, and it
+// predates this change. This loop's own logic is unchanged; it just no
+// longer needs to run every 5 minutes to do real work, since the only
+// thing left for it to catch is whatever triggerSweepAfterCredit missed (a
+// failed sweep attempt, or a credit path that doesn't call it) — a safety
+// net, not the primary mechanism.
+const SWEEP_INTERVAL_MS = 30 * 60_000;
 
-// A complete no-op unless WALLET_PROVIDER=aws-kms is explicitly set — never
-// the case on Railway/production today, so this never runs there.
+// A complete no-op unless WALLET_PROVIDER=aws-kms is explicitly set — this
+// comment used to (wrongly) claim that's never the case on Railway/
+// production; confirmed live (2026-10-05) that it genuinely is set there —
+// this sweeper has been running in production the whole time, not a no-op.
 export function startDepositSweeper(): void {
   if (env.walletProvider !== "aws-kms") return;
   setInterval(() => {

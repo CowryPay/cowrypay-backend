@@ -31,8 +31,9 @@ const NETWORK_NAMES: Record<string, string> = {
   solana: "SOLANA",
   base: "BASE",
   ethereum: "ETHEREUM",
-  // Confirmed supported (2026-10-10) — Centiiv is the exclusive provider
-  // for Arc offramps; Paycrest has no Arc rail (see paycrestAdapter.ts).
+  // Confirmed live (2026-09-30) via scripts/verify-centiiv-arc-network.ts:
+  // network "ARC" returned a real quote (10 USDC -> NGN, rate 1365.5,
+  // fees 0). No longer just assumed from Centiiv's naming pattern.
   arc: "ARC",
 };
 

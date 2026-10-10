@@ -117,10 +117,20 @@ describe("dojahKycAdapter.parseWebhookResult", () => {
     expect(dojahKycAdapter.parseWebhookResult(body)).toEqual({ providerReference: ref, decision: "rejected" });
   });
 
-  it.each(["Failed", "Abandoned"])("rejects on %s", (verification_status) => {
-    expect(dojahKycAdapter.parseWebhookResult(payload({ verification_status }))).toEqual({
+  it("rejects on Failed", () => {
+    expect(dojahKycAdapter.parseWebhookResult(payload({ verification_status: "Failed" }))).toEqual({
       providerReference: ref,
       decision: "rejected",
+    });
+  });
+
+  // Distinct from Failed: Dojah reviewed and said no vs. the user never
+  // finished — resolveKyc treats these very differently (see
+  // tests/kyc/resolveKyc.test.ts's "decision=abandoned" block).
+  it("returns decision=abandoned (not rejected) on Abandoned", () => {
+    expect(dojahKycAdapter.parseWebhookResult(payload({ verification_status: "Abandoned" }))).toEqual({
+      providerReference: ref,
+      decision: "abandoned",
     });
   });
 

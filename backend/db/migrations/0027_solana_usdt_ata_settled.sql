@@ -1,0 +1,11 @@
+-- solanaAtaReclaimer.ts checks every never-deposited-USDT Solana wallet's
+-- ATA every hour via RPC, forever, with no way to remember "already
+-- confirmed there's nothing here" — a wallet whose ATA was never created
+-- (the common case now that solanaAdapter.ts stopped eagerly funding it at
+-- signup) or was already reclaimed gets re-checked on every single cycle
+-- for the lifetime of the wallet. This flag lets that job skip a wallet
+-- for good once it's confirmed settled (ATA doesn't exist, or was just
+-- closed) — set only from a clean, non-throwing "account not found" RPC
+-- response, never from a caught error, so a transient RPC failure can't
+-- accidentally mark a wallet permanently skipped.
+alter table wallets add column if not exists solana_usdt_ata_settled boolean not null default false;

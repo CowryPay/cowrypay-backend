@@ -65,6 +65,14 @@ export const env = {
   // dojahAdapter.ts's GOVERNMENT_DATA_COUNTRIES for the actual routing.
   dojahWidgetIdGlobal: process.env.DOJAH_WIDGET_ID_GLOBAL,
   dojahBaseUrl: process.env.DOJAH_BASE_URL ?? "https://api.dojah.io",
+  // How long a "pending" KYC attempt is treated as still-open, vendor-
+  // agnostic (not Dojah-specific, unlike the vars above): startKyc reuses
+  // the existing attempt's reference instead of minting a new one within
+  // this window, and both startKyc's stale-path and the background poller
+  // (kycPendingTtlPoller.ts) auto-abandon it once past this window. One
+  // TTL for both so there's a single number to reason about, not two that
+  // can drift out of sync.
+  kycPendingTtlMinutes: Number(process.env.KYC_PENDING_TTL_MINUTES ?? 30),
   // AML/watchlist screening at KYC completion (KYC issue #6). Opt-in, not
   // on by default: every screen is a billed Dojah call, and turning it on
   // starts holding/blocking users, so an existing deployment shouldn't pick
