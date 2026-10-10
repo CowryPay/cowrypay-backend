@@ -31,9 +31,8 @@ const NETWORK_NAMES: Record<string, string> = {
   solana: "SOLANA",
   base: "BASE",
   ethereum: "ETHEREUM",
-  // UNVERIFIED (2026-09-28) — assumed from Centiiv's naming pattern, not
-  // yet confirmed against /public/quote (it 401s without a key). Must get
-  // a real quote back for network "ARC" before this ships.
+  // Confirmed supported (2026-10-10) — Centiiv is the exclusive provider
+  // for Arc offramps; Paycrest has no Arc rail (see paycrestAdapter.ts).
   arc: "ARC",
 };
 
