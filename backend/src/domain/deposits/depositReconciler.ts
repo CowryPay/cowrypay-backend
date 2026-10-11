@@ -12,7 +12,13 @@ import type { Wallet } from "../../types.js";
 const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
 const RECONCILE_MAX_BLOCK_RANGE = 2000n;
-const RECONCILE_CONFIRMATION_BUFFER = 2n;
+// Same rule as the scanner (depositScanner.ts): the monotonic rescan cursor
+// can never revisit a block it skipped on a success reply, so never ask the
+// RPC for blocks its log index may not have finished indexing yet (real
+// 2026-10-11 Base miss). Must be >= the scanner's buffer — otherwise this
+// backstop could itself advance past a just-mined block and nothing would
+// ever catch it. 60 blocks ≈ 2 min on a 2s-block chain.
+const RECONCILE_CONFIRMATION_BUFFER = 60n;
 
 // A second, independent pass over the same Transfer logs the deposit
 // scanner (depositScanner.ts) already watches, deliberately NOT sharing its
@@ -132,7 +138,7 @@ async function reconcileChain(chain: string, wallets: Wallet[]): Promise<void> {
       `[deposit-reconciler] re-ingested ${corrected.length} deposit(s) on ${chain} the scanner had missed: ${corrected.join(" ")}`,
     );
     await sendTelegramOpsAlert(
-      `<b>CowryPay deposit reconciler</b>\n\nThe scanner missed ${corrected.length} deposit(s) on ${chain.toUpperCase()} (RPC likely truncated a log range) — re-ingested and credited:\n\n${corrected.join("\n")}`,
+      `<b>CowryPay deposit reconciler</b>\n\nThe scanner advanced past ${corrected.length} deposit(s) on ${chain.toUpperCase()} before the RPC's log index had them (fresh block or truncated reply) — backstop re-ingested and credited (idempotent, no double credit):\n\n${corrected.join("\n")}`,
     );
   }
 }

@@ -15,10 +15,19 @@ const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from, addres
 // be large — capping the range per cycle lets it catch up over several
 // cycles instead of failing outright.
 const MAX_BLOCK_RANGE = 2000n;
-// Most chains here finalize blocks quickly with no probabilistic reorgs
-// (Celo's BFT consensus, the L2s' fast finality) — this buffer is cheap
-// insurance rather than a response to any real reorg risk observed.
-const CONFIRMATION_BUFFER = 2n;
+// How far to stay behind head before trusting the RPC's logs. The cursor
+// is monotonic: once the scanner advances past a block, it never revisits
+// it, so any block the RPC's log index hasn't caught up to yet is silently
+// lost on a SUCCESS reply (real incident 2026-10-11: the catch-up reached a
+// freshly-mined Base deposit ~2 min after mining, Alchemy answered
+// getLogs with 200 + an empty (not-yet-indexed) range, the cursor advanced
+// past it, and only the reconciler's later independent pass re-ingested it
+// — that Telegram alert is what you saw). 60 blocks ≈ 2 min on a 2s-block
+// chain, comfortably wider than any realistic log-index lag; chains with
+// slower block times simply wait longer, and that's the right tradeoff:
+// delayed-but-guaranteed beats fast-and-skippable by a wide margin.
+// Also insures against probabilistic reorgs (Celo BFT, L2 fast finality).
+const CONFIRMATION_BUFFER = 60n;
 
 async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
   const { viemChain, rpcUrl, tokens, nativeToken } = getChainConfig(chain);
