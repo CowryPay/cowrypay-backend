@@ -18,6 +18,7 @@ import { depositsRepo } from "../domain/deposits/repository.js";
 import { reconcileSolanaWebhookAddresses } from "../domain/monitoring/solanaWebhookReconciler.js";
 import { crossChainSendsRepo } from "../domain/crossChainSend/repository.js";
 import { getWalletAdapter, withdrawWithDroppedTxRetry } from "../domain/wallets/index.js";
+import { SUPPORTED_CHAINS } from "../domain/wallets/chains.js";
 
 export const adminRouter = Router();
 
@@ -718,7 +719,21 @@ adminRouter.post("/admin/deposits/ingest", async (req: Request, res: Response) =
   }
 
   const { userId, chain, tokenSymbol, amount, txHash, actor } = parsed.data;
-  const wallet = await walletsRepo.findByUserIdAndChain(userId, chain);
+  let wallet = await walletsRepo.findByUserIdAndChain(userId, chain);
+  // aws-kms: one KMS key derives one address valid on every EVM chain
+  // (chains.ts), stored under a single default-chain row — so the strict
+  // per-chain lookup above returns nothing for any EVM chain but that one.
+  // Real incident (2026-10-11): manual replaying a legitimately missed Base
+  // deposit (swept by depositSweeper.ts before the scanner credited it)
+  // failed with "that user has no base wallet on record", forcing a
+  // ledger-only adjust credit that leaves NO deposits row — which the
+  // scanner's chunked catch-up would later re-credit (double credit). Only
+  // valid because SUPPORTED_CHAINS is exactly the EVM set this KMS payout
+  // covers; shared-address chains (Stellar, Solana) must keep the strict
+  // lookup so a replay can't resolve to an arbitrary user's wallet.
+  if (!wallet && SUPPORTED_CHAINS.includes(chain.toLowerCase())) {
+    wallet = await walletsRepo.findByUserIdAndProvider(userId, "aws-kms");
+  }
   if (!wallet) {
     res.status(400).json({ error: `that user has no ${chain} wallet on record` });
     return;

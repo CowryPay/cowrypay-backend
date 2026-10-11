@@ -44,6 +44,7 @@ import { startQuidaxSettlementPoller } from "./domain/offramp/quidaxSettlementPo
 import { startCentiivSettlementPoller } from "./domain/offramp/centiivSettlementPoller.js";
 import { startCryptoWithdrawalConfirmationPoller } from "./domain/cryptoWithdrawals/cryptoWithdrawalConfirmationPoller.js";
 import { startDepositScanner } from "./domain/deposits/depositScanner.js";
+import { startDepositReconciler } from "./domain/deposits/depositReconciler.js";
 import { startDepositSweeper } from "./domain/wallets/depositSweeper.js";
 import { startStellarDepositScanner } from "./domain/deposits/stellarDepositScanner.js";
 import { startSolanaDepositSweeper } from "./domain/wallets/solanaDepositSweeper.js";
@@ -129,6 +130,7 @@ startQuidaxSettlementPoller();
 startCentiivSettlementPoller();
 startCryptoWithdrawalConfirmationPoller();
 startDepositScanner();
+startDepositReconciler();
 startDepositSweeper();
 startStellarDepositScanner();
 startSolanaDepositSweeper();

@@ -27,6 +27,22 @@ export const walletsRepo = {
     return rows[0] ? mapWallet(rows[0]) : null;
   },
 
+  // Used where a chain-specific lookup is the wrong shape: one aws-kms key
+  // derives ONE address that is valid on every EVM chain (chains.ts), but a
+  // user has only a single wallets row for it, under env.defaultChain — so
+  // findByUserIdAndChain(userId, chain) returns nothing for every chain but
+  // that one. The caller (routes/admin.ts's manual deposit ingest) falls
+  // back to this for aws-kms wallets on EVM chains; it must never be used
+  // for shared-address chains (Stellar) where it would resolve to the wrong
+  // user's wallet.
+  async findByUserIdAndProvider(userId: string, provider: string): Promise<Wallet | null> {
+    const { rows } = await pool.query(
+      `select * from wallets where user_id = $1 and provider = $2 order by created_at asc limit 1`,
+      [userId, provider],
+    );
+    return rows[0] ? mapWallet(rows[0]) : null;
+  },
+
   // Case-insensitive: an EVM address has no single canonical casing (the
   // same address can be represented all-lowercase or EIP-55 checksummed),
   // and different Blockradar API responses aren't guaranteed to agree on

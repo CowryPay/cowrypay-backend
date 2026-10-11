@@ -6,6 +6,7 @@ import { getChainConfig, SUPPORTED_CHAINS } from "../wallets/chains.js";
 import type { Wallet } from "../../types.js";
 import { ingestDeposit } from "./stateMachine.js";
 import { withAdvisoryLock } from "../../db/advisoryLock.js";
+import { fetchTransferLogsChunked } from "./depositLogQuery.js";
 
 const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
@@ -54,31 +55,37 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
   // once Celo's cursor fell even slightly behind, every cycle requested
   // more than that and failed, the cursor never advanced, and the
   // requested range only grew from there. A permanent stuck loop, not a
-  // transient blip — it could never recover on its own. Halves the range
-  // and retries on any getLogs failure instead of trusting a fixed
-  // constant across every provider/chain/plan, so it self-heals to
-  // whatever the real limit actually is rather than needing that limit
-  // hardcoded (which would just as fragilely break again if it ever
-  // changes, or differs for Base/Optimism on the same Alchemy account).
-  let logs;
-  for (;;) {
-    try {
-      logs = await client.getLogs({
+  // transient blip — it could never recover on its own. fetchTransferLogs
+  // (depositLogQuery.ts) halves the range and retries on any getLogs
+  // failure instead of trusting a fixed constant across every
+  // provider/chain/plan, so it self-heals to whatever the real limit
+  // actually is rather than needing that limit hardcoded (which would
+  // just as fragilely break again if it ever changes, or differs for
+  // Base/Optimism on the same Alchemy account). It additionally treats a
+  // response pinned at the truncation-suspect cap as truncated rather than
+  // trusted (public RPCs answer oversized requests with 200 + a partial
+  // list — the exact shape that silently lost a real Base deposit on
+  // 2026-10-10) and shrinks instead. fetchTransferLogsChunked keeps
+  // issuing the provider-accepted span back-to-back until the whole
+  // MAX_BLOCK_RANGE window is covered, so a 10-block cap can't make the
+  // cursor fall behind Base's ~2s blocks forever (verified live: Alchemy
+  // keyed RPC accepts only ~10-block eth_getLogs spans).
+  const { logs, fetchedTo } = await fetchTransferLogsChunked(
+    (f: bigint, t: bigint) =>
+      client.getLogs({
         address: tokenAddresses,
         event: TRANSFER_EVENT,
         args: { to: wallets.map((w) => w.address as `0x${string}`) },
-        fromBlock,
-        toBlock,
-      });
-      break;
-    } catch (err) {
-      if (toBlock <= fromBlock) throw err; // already as narrow as possible — a real failure, not a range problem
-      toBlock = fromBlock + (toBlock - fromBlock) / 2n;
-    }
-  }
+        fromBlock: f,
+        toBlock: t,
+      }),
+    fromBlock,
+    toBlock,
+  );
 
-  // Cursor only advances if every log in this range is successfully
-  // ingested — a transient failure partway through means the whole range
+  // Cursor advances only as far as the logs we fully fetched AND ingested
+  // (fetchedTo, which can be narrower than toBlock when the query had to
+  // be shrunk) — a transient failure partway through means the whole range
   // is retried next cycle rather than silently skipping past a deposit.
   // Safe to retry: insertIfNew's (chain, tx_hash) unique constraint makes
   // re-ingesting an already-processed deposit a no-op.
@@ -110,7 +117,7 @@ async function scanChain(chain: string, wallets: Wallet[]): Promise<void> {
   }
 
   if (allSucceeded) {
-    await chainScanCursorRepo.setCursor(chain, toBlock);
+    await chainScanCursorRepo.setCursor(chain, fetchedTo);
   }
 }
 
