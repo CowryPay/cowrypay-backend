@@ -34,7 +34,7 @@ import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult 
 // flow here, just using Circle's verified step implementations instead
 // of hand-rolled ones.
 
-export const EVM_CHAINS_HERE = new Set(["base", "optimism"]);
+export const EVM_CHAINS_HERE = new Set(["arc", "base", "optimism"]);
 
 // Real incident: an SDK update started enforcing at runtime what the type
 // (readonly ChainDefinition[]) always implied but never checked —
@@ -47,7 +47,7 @@ export const EVM_CHAINS_HERE = new Set(["base", "optimism"]);
 // file already depends on elsewhere — split by adapter kind (EVM vs
 // Solana), not the full registry for both, since an adapter declaring a
 // chain it can't actually sign for would be a lie the SDK might act on.
-const EVM_CHAIN_DEFINITIONS = [CHAIN_DEFINITIONS.base, CHAIN_DEFINITIONS.optimism].filter(
+const EVM_CHAIN_DEFINITIONS = [CHAIN_DEFINITIONS.arc, CHAIN_DEFINITIONS.base, CHAIN_DEFINITIONS.optimism].filter(
   (def): def is NonNullable<typeof def> => def != null,
 );
 const SOLANA_CHAIN_DEFINITIONS = [CHAIN_DEFINITIONS.solana].filter((def): def is NonNullable<typeof def> => def != null);
@@ -257,6 +257,29 @@ export async function executePrepared(chain: string, prepared: Prepared): Promis
 // SOLANA_TOKEN_DECIMALS, chains.ts's per-chain token configs).
 const CCTP_USDC_DECIMALS = 6;
 
+// Arc (see wallets/chains.ts): USDC is also the gas token, ONE balance —
+// approve + burn are paid out of the very USDC being burned. Same finding
+// as awsKmsAdapter.ts's withdraw(): eth_estimateGas still passes when
+// nothing would be left for gas, so an underfunded burn gets mined and
+// reverts on-chain, burning gas. Checked before approve instead, so it
+// fails while service.ts can still refund cleanly. A no-op on every chain
+// whose gas token is separate (Base, Optimism) and on Solana.
+export async function assertPayoutCoversBurnAndGas(chain: string, amountBaseUnits: bigint): Promise<void> {
+  if (!EVM_CHAINS_HERE.has(chain.toLowerCase())) return;
+  const { viemChain, rpcUrl, nativeToken, gasBufferThreshold } = getChainConfig(chain);
+  if (nativeToken?.symbol !== "USDC") return;
+  const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn!);
+  const balance = await createPublicClient({ chain: viemChain, transport: http(rpcUrl) }).getBalance({
+    address: payoutAddress,
+    blockTag: "pending",
+  });
+  const needed =
+    amountBaseUnits * 10n ** BigInt(viemChain.nativeCurrency.decimals - CCTP_USDC_DECIMALS) + gasBufferThreshold;
+  if (balance < needed) {
+    throw new Error(`payout wallet can't cover the burn plus gas on ${chain}: have ${balance}, need ${needed}`);
+  }
+}
+
 export async function initiateCctpBurn(input: BridgeInitiateInput): Promise<BridgeInitiateResult> {
   const { source, destination } = await walletContexts(input.sourceChain, input.destinationChain, input.destinationAddress);
 
@@ -267,6 +290,7 @@ export async function initiateCctpBurn(input: BridgeInitiateInput): Promise<Brid
   // decimal point. liFiAdapter.ts already does this same parseUnits
   // conversion for its own on-chain calls; this file never did.
   const amountBaseUnits = parseUnits(input.amount, CCTP_USDC_DECIMALS).toString();
+  await assertPayoutCoversBurnAndGas(input.sourceChain, BigInt(amountBaseUnits));
 
   const approvePrepared = await provider.approve(source, amountBaseUnits);
   await executePrepared(input.sourceChain, approvePrepared);

@@ -16,8 +16,9 @@ import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePh
 // here (not just "whatever chainDefinitions.ts happens to have"),
 // separate from data availability, so adding a chain definition there in
 // the future doesn't silently enable a route before its signing path
-// actually exists.
-const SUPPORTED_CHAINS = new Set(["base", "solana"]);
+// actually exists. Arc added 2026-10-12 — signs through the same KMS
+// payout wallet as Base (see cctpBridge.ts's EVM_CHAINS_HERE).
+const SUPPORTED_CHAINS = new Set(["arc", "base", "solana"]);
 
 export const cctpAdapter: BridgeAdapter = {
   // Checks both "does Circle's SDK have a chain definition for this" AND
