@@ -39,6 +39,7 @@ Examples:
 - "I want to send someone on base but I only have celo" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","sourceChainHint":"Celo","destinationChainHint":"Base"}
 - "Send 15 USDC from Base to Stellar, to GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":15,"sourceChainHint":"Base","destinationChainHint":"Stellar","toAddress":"GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37"}
 - "Send 10 USDC from Stellar to Base, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":10,"sourceChainHint":"Stellar","destinationChainHint":"Base","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
+- "Bridge 20 USDC from Base to Arc, to 0x1234567890abcdef1234567890abcdef12345678" → {"kind":"crossChainSend","action":"SEND_CROSS_CHAIN","amount":20,"sourceChainHint":"Base","destinationChainHint":"Arc","toAddress":"0x1234567890abcdef1234567890abcdef12345678"}
 - "Send 10 USDC to cowrypay memo 1003" → {"kind":"internalTransfer","action":"SEND_TO_COWRYPAY_USER","amount":10,"recipientMemoId":"1003"}
 - "I want to send to someone on cowrypay" → {"kind":"internalTransfer","action":"SEND_TO_COWRYPAY_USER"}
 - "Transfer 5 USDT0 to memo 42" → {"kind":"internalTransfer","action":"SEND_TO_COWRYPAY_USER","amount":5,"recipientMemoId":"42","tokenHint":"USDT0"}

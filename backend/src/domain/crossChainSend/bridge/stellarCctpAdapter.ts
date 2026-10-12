@@ -8,6 +8,7 @@ import {
   getSignerAddressForChain,
   executePrepared,
   checkTxConfirmed,
+  assertPayoutCoversBurnAndGas,
   type Prepared,
 } from "./cctpBridge.js";
 import {
@@ -34,15 +35,15 @@ import type { BridgeAdapter, BridgeInitiateInput, BridgeInitiateResult, BridgePh
 // (Step B) burn below.
 const EVM_SOLANA_USDC_DECIMALS = 6;
 
-// Step A: base/optimism/solana -> stellar (Stellar as destination).
-const NON_STELLAR_SOURCE_CHAINS = new Set(["base", "optimism", "solana"]);
+// Step A: arc/base/optimism/solana -> stellar (Stellar as destination).
+const NON_STELLAR_SOURCE_CHAINS = new Set(["arc", "base", "optimism", "solana"]);
 
-// Step B: stellar -> base/solana only (Stellar as source) — matches
+// Step B: stellar -> arc/base/solana only (Stellar as source) — matches
 // cctpAdapter.ts's own SUPPORTED_CHAINS for the plain-pair mint side this
 // reuses. Not optimism (not in ALL_CROSS_CHAIN_SEND_CHAINS at all — deposits
 // on hold) and not celo (no CCTP domain, routes through liFiAdapter
 // regardless of what's declared here — see bridge/index.ts's dispatch).
-const STELLAR_SOURCE_DESTINATION_CHAINS = new Set(["base", "solana"]);
+const STELLAR_SOURCE_DESTINATION_CHAINS = new Set(["arc", "base", "solana"]);
 
 const provider = new CCTPV2BridgingProvider();
 
@@ -357,6 +358,7 @@ export const stellarCctpAdapter: BridgeAdapter = {
     }
 
     const amountBaseUnits = parseUnits(input.amount, EVM_SOLANA_USDC_DECIMALS).toString();
+    await assertPayoutCoversBurnAndGas(sourceChain, BigInt(amountBaseUnits));
     const signerAddress = await getSignerAddressForChain(sourceChain);
     const adapter = await getAdapterForChain(sourceChain);
     const ctx = { chain: sourceChainDef, address: signerAddress };

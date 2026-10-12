@@ -28,12 +28,11 @@ import type { ParsedIntent } from "./schemas.js";
 // Celo routes through liFiAdapter regardless, which has no Stellar
 // support). See explainUnsupportedBridgePairMessage below for the exact
 // per-pair messaging.
-// Arc deliberately not here yet: @circle-fin/bridge-kit ships an Arc
-// ChainDefinition, but nothing in crossChainSend/bridge (chainDefinitions,
-// cctpBridge's EVM_CHAINS_HERE, cctpAdapter's SUPPORTED_CHAINS) or
-// crossChainSend/service.ts's source-chain sweep checks wires it up —
-// listing it here would offer a route that fails at execution time.
-export const ALL_CROSS_CHAIN_SEND_CHAINS = ["celo", "base", "solana", "stellar"];
+// Arc added 2026-10-12 (CCTP domain 26, bridge-kit >= 1.15.0): to and
+// from Base, Solana and Stellar. NOT Celo — Celo routes through
+// liFiAdapter regardless, which has no Arc support (see
+// explainUnsupportedBridgePairMessage below).
+export const ALL_CROSS_CHAIN_SEND_CHAINS = ["arc", "celo", "base", "solana", "stellar"];
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -46,8 +45,12 @@ function capitalize(s: string): string {
 // actually hold an Optimism balance to send from or land funds meant to be
 // spent from. Dropped here for that reason, not because the adapter itself
 // rejects it.
-const STELLAR_DESTINATION_SOURCE_CHAINS = ["base", "solana"]; // chains that can send TO Stellar
-const STELLAR_SOURCE_DESTINATION_CHAINS = ["base", "solana"]; // chains Stellar can send TO
+const STELLAR_DESTINATION_SOURCE_CHAINS = ["arc", "base", "solana"]; // chains that can send TO Stellar
+const STELLAR_SOURCE_DESTINATION_CHAINS = ["arc", "base", "solana"]; // chains Stellar can send TO
+
+// Arc reaches every other cross-chain-send chain over CCTP except Celo
+// (no CCTP domain; its LI.FI route has no Arc support).
+const ARC_PEER_CHAINS = ["base", "solana", "stellar"];
 
 // bridge.supports() returning false covers a few structurally different
 // cases that a flat "isn't supported yet" doesn't distinguish — same
@@ -62,6 +65,9 @@ function explainUnsupportedBridgePairMessage(sourceChain: string, destinationCha
   }
   if (sourceChain === "stellar") {
     return `Sending from Stellar to ${capitalize(destinationChain)} isn't supported yet. From Stellar, you can currently send to: ${STELLAR_SOURCE_DESTINATION_CHAINS.map(capitalize).join(", ")}.`;
+  }
+  if (sourceChain === "arc" || destinationChain === "arc") {
+    return `Sending between ${capitalize(sourceChain)} and ${capitalize(destinationChain)} isn't supported yet. Arc can currently send to and receive from: ${ARC_PEER_CHAINS.map(capitalize).join(", ")}.`;
   }
   return `Sending from ${capitalize(sourceChain)} to ${capitalize(destinationChain)} isn't supported yet.`;
 }
@@ -194,7 +200,7 @@ export async function resolveCrossChainSendIntent(
 
   // Omitted means USDC, the only token that existed before USDT support.
   const tokenSymbol = intent.tokenHint?.toUpperCase() ?? env.defaultTokenSymbol;
-  if (["celo", "base"].includes(sourceChain)) {
+  if (["arc", "celo", "base"].includes(sourceChain)) {
     try {
       getTokenConfig(sourceChain, tokenSymbol);
     } catch (err) {

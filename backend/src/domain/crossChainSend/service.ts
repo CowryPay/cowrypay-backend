@@ -14,7 +14,7 @@ import { walletChainKeyFor } from "../cryptoWithdrawals/service.js";
 import { computeCrossChainSendFeeSplit, requireTreasuryAddress } from "../offramp/fee.js";
 import { readTokenBalance, sweepWallet } from "../wallets/depositSweeper.js";
 import { getWalletAddress } from "../wallets/awsKmsAdapter.js";
-import { getTokenConfig } from "../wallets/chains.js";
+import { getChainConfig, getTokenConfig } from "../wallets/chains.js";
 import { getSolanaMint, readSolanaTreasuryBalance, SOLANA_TOKEN_DECIMALS } from "../wallets/solanaAdapter.js";
 import { sweepWallet as sweepSolanaWallet } from "../wallets/solanaDepositSweeper.js";
 import { getBridgeAdapter } from "./bridge/index.js";
@@ -86,7 +86,7 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   }
 
   const tokenSymbol = input.tokenSymbol ?? env.defaultTokenSymbol;
-  if (["celo", "base"].includes(input.sourceChain.toLowerCase())) {
+  if (["arc", "celo", "base"].includes(input.sourceChain.toLowerCase())) {
     getTokenConfig(input.sourceChain, tokenSymbol);
   }
 
@@ -144,11 +144,20 @@ export async function initiateCrossChainSend(userId: string, input: InitiateCros
   // from, same liquidity concern a same-chain withdrawal has. Does
   // nothing for a shortfall bigger than this one user's own deposit —
   // correctly not this function's job.
-  if (wallet.provider === "aws-kms" && ["celo", "base"].includes(input.sourceChain) && env.awsKmsPayoutKeyArn) {
+  if (wallet.provider === "aws-kms" && ["arc", "celo", "base"].includes(input.sourceChain) && env.awsKmsPayoutKeyArn) {
     try {
       const payoutAddress = await getWalletAddress(env.awsKmsPayoutKeyArn);
       const { decimals: tokenDecimals } = getTokenConfig(input.sourceChain, tokenSymbol);
-      const needed = parseUnits(input.amount, tokenDecimals);
+      const { viemChain, nativeToken, gasBufferThreshold } = getChainConfig(input.sourceChain);
+      // On Arc the burn's gas comes out of this same USDC balance (see
+      // chains.ts) — "enough" has to match cctpBridge.ts's
+      // assertPayoutCoversBurnAndGas, or this skips a sweep that check
+      // then fails the send for.
+      const gasHeadroom =
+        nativeToken?.symbol === tokenSymbol.toUpperCase()
+          ? gasBufferThreshold / 10n ** BigInt(viemChain.nativeCurrency.decimals - tokenDecimals)
+          : 0n;
+      const needed = parseUnits(input.amount, tokenDecimals) + gasHeadroom;
       const payoutBalance = await readTokenBalance(input.sourceChain, tokenSymbol, payoutAddress);
       if (payoutBalance < needed) {
         console.log(
