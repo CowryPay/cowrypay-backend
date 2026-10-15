@@ -314,6 +314,48 @@ export const env = {
   // own management API).
   heliusApiKey: process.env.HELIUS_API_KEY,
   heliusWebhookId: process.env.HELIUS_WEBHOOK_ID,
+  // EVM deposit speed layer (Alchemy address-activity webhooks) — a
+  // near-instant path ALONGSIDE depositScanner.ts's existing 30s poll,
+  // never a replacement for it. Everything here is UNVERIFIED against a
+  // real live Alchemy account (exact endpoint shapes, field names, and
+  // even which chains their Address Activity product covers at all —
+  // Arc especially, launched 2026-09) — see
+  // scripts/verify-alchemy-notify-api.ts. Per-chain config IS the
+  // allowlist: a chain with no signing key set below is simply never
+  // watched, registered, or reconciled, so shipping this with everything
+  // unset is inert by construction.
+  //
+  // The account-level token for Alchemy's Notify MANAGEMENT api (adding
+  // addresses to a webhook's watch list) — distinct from the per-network
+  // RPC API key already embedded in {CELO,BASE,...}_RPC_URL above, same
+  // relationship HELIUS_API_KEY has to SOLANA_WEBHOOK_SECRET.
+  alchemyAuthToken: process.env.ALCHEMY_AUTH_TOKEN,
+  // One webhook (Alchemy's Address Activity product is per-network) per
+  // chain this app watches — keys match chains.ts's own CHAIN_REGISTRY
+  // keys exactly, not a derived/uppercased lookup.
+  alchemyWebhookIds: {
+    celo: process.env.ALCHEMY_WEBHOOK_ID_CELO,
+    base: process.env.ALCHEMY_WEBHOOK_ID_BASE,
+    optimism: process.env.ALCHEMY_WEBHOOK_ID_OPTIMISM,
+    ethereum: process.env.ALCHEMY_WEBHOOK_ID_ETHEREUM,
+    arc: process.env.ALCHEMY_WEBHOOK_ID_ARC,
+  } as Record<string, string | undefined>,
+  // The signing secret Alchemy includes with THAT chain's webhook
+  // deliveries — used to verify an inbound POST /webhooks/alchemy/:chain
+  // actually came from Alchemy (domain/deposits/alchemyWebhook.ts). A
+  // chain with no entry here fails every signature check closed, same
+  // shape as solanaWebhookSecret's own guard.
+  alchemyWebhookSigningKeys: {
+    celo: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY_CELO,
+    base: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY_BASE,
+    optimism: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY_OPTIMISM,
+    ethereum: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY_ETHEREUM,
+    arc: process.env.ALCHEMY_WEBHOOK_SIGNING_KEY_ARC,
+  } as Record<string, string | undefined>,
+  // One global kill switch, same role/reasoning as solanaDepositsEnabled
+  // above — the route is always mounted (so it's safe to point Alchemy at
+  // before this is flipped on) but inert until this is "true".
+  evmWebhookDepositsEnabled: process.env.EVM_WEBHOOK_DEPOSITS_ENABLED === "true",
   // Ops-only alerting (gasStatusMonitor.ts) — a private Telegram chat, never
   // the public support group linked in chat replies. Both required for the
   // monitor to actually send anything; unset just means it logs instead of

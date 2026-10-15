@@ -190,6 +190,39 @@ const ERC20_TRANSFER_ABI = [
 // ECC_SECG_P256K1 key derives one address valid across every EVM chain
 // (same curve, same address derivation everywhere), so multi-chain support
 // doesn't require multiple keys per user — see the Phase 1 migration plan.
+// Best-effort — never blocks or fails wallet creation. Mirrors
+// solanaAdapter.ts's registerSolanaWebhookAddress exactly in spirit (same
+// try/catch-and-log shape, same "a fuller periodic reconciliation job is
+// the real safety net" stance — see monitoring/alchemyWebhookReconciler.ts),
+// but loops over every chain with a configured webhook instead of a single
+// call: one KMS key/address is valid on every EVM chain, but Alchemy's
+// Address Activity webhooks are per-network, so registering a user's
+// address means adding it to however many per-chain webhooks are
+// actually configured (env.alchemyWebhookIds — unset entries are simply
+// skipped, not attempted).
+//
+// Alchemy's real address-management endpoint/field names are UNVERIFIED
+// (see scripts/verify-alchemy-notify-api.ts) — written against their
+// documented incremental add-address shape, not a GET-then-PUT of the
+// whole webhook like Helius requires (see solanaAdapter.ts's own comment
+// on the incident that caused), but not yet confirmed live.
+async function registerAlchemyWebhookAddress(address: string): Promise<void> {
+  if (!env.alchemyAuthToken) return;
+  for (const [chain, webhookId] of Object.entries(env.alchemyWebhookIds)) {
+    if (!webhookId) continue;
+    try {
+      const res = await fetch("https://dashboard.alchemy.com/api/update-webhook-addresses", {
+        method: "PATCH",
+        headers: { "content-type": "application/json", "X-Alchemy-Token": env.alchemyAuthToken },
+        body: JSON.stringify({ webhook_id: webhookId, addresses_to_add: [address], addresses_to_remove: [] }),
+      });
+      if (!res.ok) throw new Error(`PATCH webhook failed (${res.status}): ${await res.text()}`);
+    } catch (err) {
+      console.error(`[aws-kms-adapter] failed to register ${address} with Alchemy webhook for ${chain}:`, err);
+    }
+  }
+}
+
 export const awsKmsWalletAdapter: WalletAdapter = {
   async createWallet({ userId }): Promise<CreatedWallet> {
     const client = kmsClient();
@@ -215,6 +248,7 @@ export const awsKmsWalletAdapter: WalletAdapter = {
     );
 
     const address = await fetchAddressForKey(client, keyId);
+    await registerAlchemyWebhookAddress(address);
 
     return {
       externalWalletId: keyArn,
