@@ -149,7 +149,16 @@ export const env = {
   centiivBaseUrl: process.env.CENTIIV_BASE_URL ?? "https://api.centiiv.io",
   // How long a half-finished multi-turn chat draft (e.g. a partial send
   // request) survives with no reply before the next message starts fresh.
-  chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 10),
+  // Raised from 10 to 60 (2026-10-15) — a real user complaint: stepping
+  // away mid-transaction (e.g. to go find a recipient's account number)
+  // for just over 10 minutes meant coming back to nothing, forcing a
+  // full restart. touchSession already resets this on ANY activity while
+  // a draft is pending (chat/service.ts), so this only ever bites true
+  // no-interaction gaps — a generous window here has no money-safety
+  // downside, since the PIN/confirmation step is a separate, deliberate
+  // REST flow regardless of how old the draft is (see chat/service.ts's
+  // §9 comment).
+  chatSessionIdleMinutes: Number(process.env.CHAT_SESSION_IDLE_MINUTES ?? 60),
   // Platform fee skimmed from every remittance, in basis points (100 = 1%).
   // Only required when a send is actually resolved — checked lazily by
   // domain/offramp/fee.ts, not here.
