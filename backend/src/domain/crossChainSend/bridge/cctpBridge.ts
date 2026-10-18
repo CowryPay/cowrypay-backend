@@ -8,6 +8,7 @@ import { env } from "../../../config/env.js";
 import { getChainConfig } from "../../wallets/chains.js";
 import { getWalletAddress, kmsAccountFromKey } from "../../wallets/awsKmsAdapter.js";
 import { fetchPendingNonce, withClaimedNonce } from "../../wallets/evmNonce.js";
+import { withEvmTransportRetry } from "./evmRawTx.js";
 import { getSolanaTreasurySigner } from "../../wallets/solanaKms.js";
 import { CHAIN_DEFINITIONS, getChainDefinition } from "./chainDefinitions.js";
 import type { BridgeInitiateInput, BridgeInitiateResult, BridgePhaseCheckResult } from "./adapter.js";
@@ -237,7 +238,11 @@ export async function executePrepared(chain: string, prepared: Prepared): Promis
   if (prepared.type === "noop") return null;
   if (prepared.type === "evm") {
     return withSharedNonce(chain, (nonce) =>
-      (prepared as unknown as { execute(overrides?: { nonce?: number }): Promise<string> }).execute({ nonce }),
+      // Real incident (2026-10-18): a 429 from Alchemy during this exact
+      // broadcast — see evmRawTx.ts's own comment on withEvmTransportRetry.
+      withEvmTransportRetry(() =>
+        (prepared as unknown as { execute(overrides?: { nonce?: number }): Promise<string> }).execute({ nonce }),
+      ),
     );
   }
   if (prepared.type === "solana") {
