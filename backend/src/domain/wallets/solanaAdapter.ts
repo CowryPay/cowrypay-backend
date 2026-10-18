@@ -12,6 +12,7 @@ import {
   lamports,
   isSolanaError,
   SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   type Signature,
 } from "@solana/kit";
 import { getTransferSolInstruction } from "@solana-program/system";
@@ -100,6 +101,36 @@ export async function readSolanaTreasuryBalance(tokenSymbol: string): Promise<bi
 const CONFIRM_POLL_INTERVAL_MS = 2_000;
 const CONFIRM_REBROADCAST_INTERVAL_MS = 5_000;
 
+const TRANSPORT_RETRY_ATTEMPTS = 3;
+const TRANSPORT_RETRY_DELAY_MS = 750;
+
+// Real incident (2026-10-17): a user's off-ramp payout failed outright on
+// the very first attempt with SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR
+// (a 429 from our shared Alchemy Solana endpoint) — an identical send had
+// worked fine two days earlier, nothing was wrong with the request itself,
+// it just happened to land during a momentary rate-limit blip. Of the RPC
+// calls signAndSendTransaction/confirmByPolling make, only the actual
+// broadcast has any resilience of its own (confirmByPolling's own
+// rebroadcast-on-interval loop, which already swallows and retries that one
+// call) — getLatestBlockhash/getSignatureStatuses/getBlockHeight had none,
+// so a single transient blip on any of them aborted the whole send. Scoped
+// specifically to this one error code (not a catch-all retry) so a REAL
+// failure — insufficient funds, an invalid instruction, anything
+// Solana itself rejects — still fails immediately instead of being masked
+// behind a few seconds of pointless retrying.
+async function withTransportRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= TRANSPORT_RETRY_ATTEMPTS || !isSolanaError(err, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, TRANSPORT_RETRY_DELAY_MS * attempt));
+    }
+  }
+}
+
 // HTTP-only replacement for @solana/kit's sendAndConfirmTransactionFactory.
 // That factory confirms via a WebSocket signatureSubscribe push, which
 // returns a hard "-32601 Method not found" against our Alchemy endpoint in
@@ -126,7 +157,7 @@ async function confirmByPolling(
 
     const {
       value: [status],
-    } = await rpc.getSignatureStatuses([signature]).send();
+    } = await withTransportRetry(() => rpc.getSignatureStatuses([signature]).send());
     if (status) {
       if (status.err) {
         throw new Error(`Solana transaction failed: ${JSON.stringify(status.err)}`);
@@ -136,7 +167,7 @@ async function confirmByPolling(
       }
     }
 
-    const blockHeight = await rpc.getBlockHeight().send();
+    const blockHeight = await withTransportRetry(() => rpc.getBlockHeight().send());
     if (blockHeight > lastValidBlockHeight) {
       throw new Error("Solana transaction expired before confirmation (blockhash no longer valid)");
     }
@@ -162,7 +193,7 @@ export async function signAndSendTransaction(
   instructions: readonly unknown[],
 ): Promise<string> {
   const rpc = rpcClient();
-  const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
+  const { value: latestBlockhash } = await withTransportRetry(() => rpc.getLatestBlockhash().send());
 
   const message = pipe(
     createTransactionMessage({ version: 0 }),
