@@ -51,6 +51,23 @@ export const pool = new Pool({
   // long any single query can run once connected.
   connectionTimeoutMillis: 8_000,
   statement_timeout: 10_000,
+  // Real incident (2026-10-18): Supabase egress quota exceeded again
+  // (6.635/5 GB) despite every table being under 200KB — confirmed the
+  // actual driver is connection count, not query payload size. pg-pool
+  // defaults to min:0 / idleTimeoutMillis:10_000, so with ~16 setInterval
+  // background jobs each running one query at a time, minutes apart, the
+  // pool's one connection was idling out and being torn down between
+  // almost every single tick — meaning nearly every background-job query
+  // paid a full fresh TLS handshake to Supabase's pooler (Paris) from
+  // Railway (sfo), not just the tiny query payload itself. min:1 keeps one
+  // connection permanently warm (pg-pool never closes a connection at or
+  // below min, regardless of idleTimeoutMillis) so sequential jobs reuse
+  // it instead of reconnecting from scratch every time; the longer
+  // idleTimeoutMillis covers any extra connections opened during a real
+  // concurrent-request burst, so those don't get torn down seconds later
+  // either. Pure connection-pool tuning — no query or behavior changed.
+  min: 1,
+  idleTimeoutMillis: 5 * 60_000,
 });
 
 export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
